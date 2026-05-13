@@ -6,32 +6,17 @@
     extra-trusted-public-keys = [ "unpins.cachix.org-1:DDaShjbZ8VvcqxeTcAU3kV9vxZQBlyb7V/uLBHfTynI=" ];
   };
 
-  inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.11";
-    unpins-lib.url = "github:unpins/nix-lib/v1";
-  };
+  inputs.unpins-lib.url = "github:unpins/nix-lib";
 
-  outputs = { self, nixpkgs, unpins-lib }:
-    let
-      lib = nixpkgs.lib;
-      ulib = unpins-lib.lib;
-
-      pkgsFor = system: import nixpkgs { inherit system; };
+  outputs = { self, unpins-lib }:
+    unpins-lib.lib.mkStandaloneFlake {
+      inherit self;
+      name = "vim";
 
       # Native: pkgs.pkgsStatic.vim is already minimal (no Lua, no
       # Python, no Ruby, no GUI), and the static set is in the binary
       # cache so this is a free download for Linux/Darwin runners.
-      mkNative = system:
-        let
-          pkgs = pkgsFor system;
-          stripped = pkgs.pkgsStatic.vim.overrideAttrs (_: { stripAllList = [ "out" ]; });
-        in
-        pkgs.symlinkJoin {
-          name = "vim-${stripped.version}";
-          # `out` already contains bin/, share/vim/runtime/, share/man/
-          paths = [ stripped ];
-          passthru = { inherit (stripped) version pname; };
-        };
+      build = pkgs: pkgs.pkgsStatic.vim;
 
       # Windows: bypass nixpkgs' autotools-based pkgsCross.mingwW64.vim
       # (which pulls broken cross deps like gawk and forces ncurses) and
@@ -43,12 +28,8 @@
       # pure text (.vim/.txt/.spl/.mo) with nothing arch-specific, and is
       # already in the binary cache, so the Windows install matches the
       # native install file-for-file.
-      mkWindows = buildSystem:
+      windowsBuild = pkgs:
         let
-          pkgs = import nixpkgs {
-            system = buildSystem;
-            config.allowUnsupportedSystem = true;
-          };
           cross = pkgs.pkgsCross.mingwW64;
           vimSrc = pkgs.vim.src;
           inherit (pkgs.vim) version;
@@ -121,25 +102,6 @@
           name = "vim-${version}-windows";
           paths = [ vimExe vimRuntime ];
           passthru = { pname = "vim"; inherit version; };
-          meta = with lib; {
-            description = "Vim editor, minimal MinGW build";
-            platforms = [ "x86_64-linux" ];
-            mainProgram = "vim";
-          };
         };
-    in
-    {
-      packages = lib.recursiveUpdate
-        (ulib.forAllNative (system: { default = mkNative system; }))
-        {
-          x86_64-linux."windows-x86_64" = mkWindows "x86_64-linux";
-        };
-
-      apps = ulib.forAllNative (system: {
-        default = {
-          type = "app";
-          program = "${self.packages.${system}.default}/bin/vim";
-        };
-      });
     };
 }
