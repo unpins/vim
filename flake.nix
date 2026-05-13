@@ -13,95 +13,66 @@
       inherit self;
       name = "vim";
 
-      # Native: pkgs.pkgsStatic.vim is already minimal (no Lua, no
-      # Python, no Ruby, no GUI), and the static set is in the binary
-      # cache so this is a free download for Linux/Darwin runners.
+      # pkgs.pkgsStatic.vim is already minimal (no Lua/Python/Ruby/GUI)
+      # and lives in the binary cache.
       build = pkgs: pkgs.pkgsStatic.vim;
 
-      # Windows: bypass nixpkgs' autotools-based pkgsCross.mingwW64.vim
-      # (which pulls broken cross deps like gawk and forces ncurses) and
-      # build via Vim's official Make_mingw.mak / Make_cyg_ming.mak with
-      # CROSS=yes, GUI=no, statically linked C++ runtime + winpthread.
-      # Result is a single console vim.exe importing only system DLLs.
-      #
-      # The runtime tree (share/vim/vim92) is reused from pkgs.vim — it's
-      # pure text (.vim/.txt/.spl/.mo) with nothing arch-specific, and is
-      # already in the binary cache, so the Windows install matches the
-      # native install file-for-file.
+      # pkgsCross.mingwW64.vim is autotools-based and pulls broken cross
+      # deps (gawk, ncurses); build Vim's own Make_ming.mak directly.
+      # Runtime tree (share/vim/vim92) is pure text — reuse from pkgs.vim
+      # so native and Windows installs are file-for-file equivalent.
       windowsBuild = pkgs:
         let
           cross = pkgs.pkgsCross.mingwW64;
-          vimSrc = pkgs.vim.src;
-          inherit (pkgs.vim) version;
-
-          vimExe = cross.stdenv.mkDerivation {
-            pname = "vim-exe";
-            inherit version;
-            src = vimSrc;
-
-            dontConfigure = true;
-
-            # libwinpthread.a (static pthread for MinGW). Without it,
-            # Make_ming.mak's `-Wl,-Bstatic -lwinpthread` link line bails.
-            buildInputs = [ cross.windows.pthreads ];
-            strictDeps = true;
-            enableParallelBuilding = true;
-
-            # Make_mingw.mak knobs:
-            #   FEATURES=NORMAL — middle ground (no Lua/Python/Ruby/Tcl,
-            #     keeps syntax/spell/cmdline_compl etc).
-            #   GUI=no          — console only.
-            #   CROSS=yes       — cross-compile mode (skips host probes).
-            #   STATIC_STDCPLUS / STATIC_WINPTHREAD — embed gcc/winpthread
-            #     runtime so the .exe doesn't need libstdc++-6.dll or
-            #     libwinpthread-1.dll companions.
-            buildPhase = ''
-              runHook preBuild
-              cd src
-              # Build only vim.exe + xxd.exe. The default `all` target
-              # also tries to build GvimExt/gvimext.dll (Windows Explorer
-              # shell extension), which we don't need for a headless CLI.
-              make -f Make_ming.mak \
-                FEATURES=NORMAL \
-                GUI=no \
-                CROSS=yes \
-                CROSS_COMPILE=x86_64-w64-mingw32- \
-                STATIC_STDCPLUS=yes \
-                STATIC_WINPTHREAD=yes \
-                WINDRES=x86_64-w64-mingw32-windres \
-                ARCH=x86-64 \
-                -j$NIX_BUILD_CORES \
-                vim.exe xxd/xxd.exe
-              cd ..
-              runHook postBuild
-            '';
-
-            installPhase = ''
-              runHook preInstall
-              mkdir -p $out/bin
-              cp src/vim.exe $out/bin/vim.exe
-              cp src/xxd/xxd.exe $out/bin/xxd.exe
-              runHook postInstall
-            '';
-
-            passthru = { pname = "vim"; inherit version; };
-          };
-
-          # Extract just share/vim from pkgs.vim — pure text, identical
-          # across platforms. Cheaper than building it twice and keeps
-          # native and Windows installs file-for-file equivalent.
-          vimRuntime = pkgs.runCommand "vim-runtime-${version}" { } ''
-            mkdir -p $out/share
-            cp -r ${pkgs.vim}/share/vim $out/share/vim
-          '';
+          prefix = cross.stdenv.hostPlatform.config;
         in
-        # Vim discovers runtime by walking up from $argv[0], so the .exe
-        # in $out/bin and the runtime in $out/share/vim/vim92 wire up
-        # automatically.
-        pkgs.symlinkJoin {
-          name = "vim-${version}-windows";
-          paths = [ vimExe vimRuntime ];
-          passthru = { pname = "vim"; inherit version; };
+        cross.stdenv.mkDerivation {
+          pname = "vim";
+          inherit (pkgs.vim) version src;
+
+          dontConfigure = true;
+
+          # libwinpthread.a (static pthread for MinGW). Without it,
+          # Make_ming.mak's `-Wl,-Bstatic -lwinpthread` line bails.
+          buildInputs = [ cross.windows.pthreads ];
+          strictDeps = true;
+          enableParallelBuilding = true;
+
+          # Make_ming.mak knobs:
+          #   FEATURES=NORMAL — no Lua/Python/Ruby/Tcl; keeps syntax/spell/...
+          #   GUI=no          — console only (Make_ming.mak defaults to yes).
+          #   CROSS=yes       — skips host probes.
+          #   STATIC_*=yes    — embed gcc/winpthread runtime; no DLL companions.
+          # Build vim.exe + xxd.exe explicitly: default `all` also builds
+          # GvimExt/gvimext.dll (Explorer shell extension) which we don't need.
+          buildPhase = ''
+            runHook preBuild
+            make -C src -f Make_ming.mak \
+              FEATURES=NORMAL \
+              GUI=no \
+              CROSS=yes \
+              CROSS_COMPILE=${prefix}- \
+              STATIC_STDCPLUS=yes \
+              STATIC_WINPTHREAD=yes \
+              WINDRES=${prefix}-windres \
+              ARCH=x86-64 \
+              -j$NIX_BUILD_CORES \
+              vim.exe xxd/xxd.exe
+            runHook postBuild
+          '';
+
+          # Vim discovers runtime by walking up from $argv[0]; $out/bin
+          # + $out/share/vim/vim92 wire up automatically.
+          installPhase = ''
+            runHook preInstall
+            mkdir -p $out/bin $out/share
+            cp src/vim.exe $out/bin/vim.exe
+            cp src/xxd/xxd.exe $out/bin/xxd.exe
+            cp -r ${pkgs.vim}/share/vim $out/share/vim
+            runHook postInstall
+          '';
+
+          passthru = { pname = "vim"; inherit (pkgs.vim) version; };
         };
     };
 }
