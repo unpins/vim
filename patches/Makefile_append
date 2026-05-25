@@ -1,0 +1,17 @@
+
+# === unpins VFS compile rules ===
+objects/unpins_vfs.o: unpins_vfs.c unpins_vfs.h miniz.h
+	$(CCC_NF) $(ALL_CFLAGS) -D_GNU_SOURCE -DMINIZ_NO_TIME -DMINIZ_NO_ARCHIVE_WRITING_APIS -DMINIZ_NO_ZLIB_APIS -DMINIZ_NO_ZLIB_COMPATIBLE_NAMES -o $@ unpins_vfs.c
+
+objects/unpins_init.o: unpins_init.c unpins_vfs.h
+	$(CCC_NF) $(ALL_CFLAGS) -D_GNU_SOURCE -o $@ unpins_init.c
+
+objects/miniz.o: miniz.c miniz.h
+	$(CCC_NF) $(ALL_CFLAGS) -D_GNU_SOURCE -w -DMINIZ_NO_TIME -DMINIZ_NO_ARCHIVE_WRITING_APIS -DMINIZ_NO_ZLIB_APIS -DMINIZ_NO_ZLIB_COMPATIBLE_NAMES -o $@ miniz.c
+
+# Embed runtime ZIP via .incbin in a single .S source. Same symbol shape
+# as `ld -r -b binary` would have produced, but the C compiler does the
+# work — sidesteps Apple ld's missing -b binary support on Mach-O and
+# the nixpkgs ld-wrapper's --gc-sections conflict with -r.
+objects/unpins_runtime_data.o: unpins_runtime_data.S unpins_runtime.zip
+	$(CCC_NF) $(ALL_CFLAGS) -o $@ unpins_runtime_data.S
