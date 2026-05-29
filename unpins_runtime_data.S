@@ -35,7 +35,11 @@ __binary_unpins_runtime_zip_end:
 # if defined(_WIN32) || defined(__CYGWIN__)
     .section .rdata, "dr"
 # else
-    .section .rodata, "a", @progbits
+    /* No explicit `@progbits` type: on 32-bit ARM `@` is the line-comment
+     * char, so `, @progbits` is parsed as a comment and the trailing `,`
+     * errors out ("junk at end of line"). `.rodata` is a well-known section,
+     * so GAS infers PROGBITS from the `"a"` flag on every ELF target. */
+    .section .rodata, "a"
 # endif
     .global _binary_unpins_runtime_zip_start
     .global _binary_unpins_runtime_zip_end
