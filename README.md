@@ -1,6 +1,6 @@
 # vim
 
-Standalone build of [Vim](https://www.vim.org/) (minimal feature set, no GUI).
+Standalone build of [Vim](https://www.vim.org/) — terminal only, no GUI. The whole runtime tree (`share/vim/vim92` — syntax, ftplugin, indent, doc, …) is baked into the binary, so it's a single file with nothing to install alongside it.
 
 [![CI](https://github.com/unpins/vim/actions/workflows/vim.yml/badge.svg)](https://github.com/unpins/vim/actions)
 ![Linux](https://img.shields.io/badge/Linux-✓-success?logo=linux&logoColor=white)
@@ -40,4 +40,14 @@ The first invocation will offer to add the [unpins.cachix.org](https://unpins.ca
 
 ## Manual download
 
-The [Releases](https://github.com/unpins/vim/releases) page has standalone binaries and a `.tar.zst` data archive (Vim runtime files, man pages, syntax/spell) for manual download.
+The [Releases](https://github.com/unpins/vim/releases) page has standalone binaries for manual download.
+
+## Man pages
+
+`vim.1` (and `vimdiff`, `ex`, `view`, `rvim`, `rview`, `evim`, `vimtutor`) are embedded in the binary — read one with `unpin man vim`, e.g. `unpin man vim vimdiff`.
+
+## Build notes
+
+- **Runtime tree embedded.** Vim's runtime directory (`share/vim/vim92`) used to ship as a companion `.tar.zst`. It is now packed to a deflate ZIP at build time and linked into the binary as an ELF/PE section; a small in-binary VFS (~410 LOC of C + miniz) intercepts Vim's file calls under a private marker and serves the runtime from memory. No companion file, no extract-on-first-run. `$VIMRUNTIME` resolves to a virtual path inside the binary.
+- **Feature set differs by platform.** Linux and macOS are the **Huge** feature set (everything except the GUI); the Windows build is **Normal**. No GUI on any platform.
+- **Windows** is an `mingw` cross build. `mch_open`/`mch_fopen` are real functions there (they wrap `_wfopen`/`_wopen` for wide-char paths), so the VFS dispatches by patching those function bodies rather than via the macro redirect used on Unix.
