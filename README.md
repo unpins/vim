@@ -9,18 +9,18 @@ Standalone build of [Vim](https://www.vim.org/) — terminal only, no GUI. The w
 
 Part of the [unpins](https://unpins.org) project — native single-binary builds with no third-party runtime dependencies.
 
-## Installation
+## Usage
 
-Install with [unpin](https://github.com/unpins/unpin):
+Run the `vim` program with [unpin](https://github.com/unpins/unpin):
 
 ```bash
-unpin vim
+unpin vim file.txt
 ```
 
-Or run without installing:
+To install it onto your PATH:
 
 ```bash
-unpin run vim
+unpin install vim
 ```
 
 ## Build locally
