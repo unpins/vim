@@ -1,13 +1,13 @@
 # vim
 
-Standalone build of [Vim](https://www.vim.org/) — terminal only, no GUI. The whole runtime tree (`share/vim/vim92` — syntax, ftplugin, indent, doc, …) is baked into the binary, so it's a single file with nothing to install alongside it.
+[Vim](https://www.vim.org/) — terminal only, no GUI. A single self-contained binary, built natively for Linux, macOS, and Windows: the whole runtime tree (`share/vim/vim92` — syntax, ftplugin, indent, doc, …) is baked in, so there's nothing to install alongside it.
 
 [![CI](https://github.com/unpins/vim/actions/workflows/vim.yml/badge.svg)](https://github.com/unpins/vim/actions)
 ![Linux](https://img.shields.io/badge/Linux-✓-success?logo=linux&logoColor=white)
 ![macOS](https://img.shields.io/badge/macOS-✓-success?logo=apple&logoColor=white)
 ![Windows](https://img.shields.io/badge/Windows-✓-success?logo=windows&logoColor=white)
 
-Part of the [unpins](https://unpins.org) project — native single-binary builds with no third-party runtime dependencies.
+Part of the [unpins](https://unpins.org) catalog; install it with [`unpin`](https://github.com/unpins/unpin): `unpin install vim`.
 
 ## Usage
 
@@ -22,6 +22,10 @@ To install it onto your PATH:
 ```bash
 unpin install vim
 ```
+
+## Man pages
+
+`vim.1` (and `vimdiff`, `ex`, `view`, `rvim`, `rview`, `evim`, `vimtutor`) are embedded in the binary — read one with `unpin man vim`, e.g. `unpin man vim vimdiff`.
 
 ## Build locally
 
@@ -41,10 +45,6 @@ The first invocation will offer to add the [unpins.cachix.org](https://unpins.ca
 ## Manual download
 
 The [Releases](https://github.com/unpins/vim/releases) page has standalone binaries for manual download.
-
-## Man pages
-
-`vim.1` (and `vimdiff`, `ex`, `view`, `rvim`, `rview`, `evim`, `vimtutor`) are embedded in the binary — read one with `unpin man vim`, e.g. `unpin man vim vimdiff`.
 
 ## Build notes
 
