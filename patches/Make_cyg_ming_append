@@ -1,7 +1,8 @@
 
-# === unpins VFS: tell the linker to pull in our pre-built objects ===
+# === unpin-vfs: tell the linker to pull in our pre-built objects ===
 # The objects are compiled manually in the flake's buildPhase (see flake.nix:
-# pre-make ${mingwPrefix}-gcc and -ld calls) into $(OUTDIR). All this hook
-# does is teach Make_ming.mak's $(TARGET): $(OBJ) link rule that they belong
-# in the final binary.
-OBJ += $(OUTDIR)/unpins_vfs.o $(OUTDIR)/unpins_init.o $(OUTDIR)/miniz.o $(OUTDIR)/unpins_runtime_data.o
+# pre-make ${mingwPrefix}-gcc calls) into $(OUTDIR). All this hook does is teach
+# Make_ming.mak's $(TARGET): $(OBJ) link rule that they belong in the final
+# binary. vfs.o + miniz.o are the consolidated core (was unpins_vfs.o); xxd.o is
+# xxd_main folded in as a multicall applet (vim only -- gvim.exe omits it).
+OBJ += $(OUTDIR)/vfs.o $(OUTDIR)/unpins_init.o $(OUTDIR)/miniz.o $(OUTDIR)/unpins_runtime_data.o $(OUTDIR)/xxd.o

@@ -9,33 +9,44 @@
   inputs.unpins-lib.url = "github:unpins/nix-lib";
 
   # Vim's runtime tree (share/vim/vim92 — syntax, ftplugin, doc, …) used to
-  # ship as a companion `.tar.zst` next to the binary. Since 2026-05-25 the
-  # tree is packed to a deflate ZIP at build time and linked into the binary
-  # as an ELF/PE section via `ld -r -b binary`. A tiny VFS layer (~410 LOC
-  # of C + miniz) intercepts vim's libc file calls for paths under a unique
-  # marker and serves them from the in-memory ZIP. Result: single static
-  # binary, no companion file, no extract-on-first-run.
+  # ship as a companion `.tar.zst` next to the binary. It is now packed to a
+  # deflate ZIP at build time and embedded into the binary as a read-only
+  # section (.incbin via unpins_runtime_data.S — works on ELF/PE/Mach-O). The
+  # shared unpin-vfs core (vfs.c + miniz.c; github:unpins/unpin-vfs) intercepts
+  # vim's libc file calls for paths under a private mount root and serves them
+  # from the in-memory ZIP. Result: single static binary, no companion file,
+  # no extract-on-first-run.
   outputs = { self, unpins-lib }:
     let
       injectVfs = pkgs: oldDrv: oldDrv.overrideAttrs (old:
         let
+          lib = pkgs.lib;
+          isDarwin = pkgs.stdenv.hostPlatform.isDarwin;
+          is32bit = pkgs.stdenv.hostPlatform.is32bit;
+          # macOS has no `ld --wrap`; rewrite vim's own objects' libc file refs
+          # to the VFS shims with llvm-objcopy --redefine-sym (GNU objcopy can't
+          # touch Mach-O). buildPackages so the cross darwin targets use a tool
+          # that runs on the build host.
+          objcopy = "${pkgs.buildPackages.llvm}/bin/llvm-objcopy";
+
           # vim major version → runtime dir name (vim92/vim93/…). Read out of
           # the upstream tree so we don't track it manually.
+          # Pack the vim92/ tree CONTENTS (no version prefix) so $VIMRUNTIME is
+          # exactly the mount marker -- same value the bespoke VFS used.
           runtimeZip = pkgs.runCommand "vim-runtime.zip" {
             nativeBuildInputs = [ pkgs.buildPackages.zip ];
           } ''
             cd ${oldDrv}/share/vim
             rt=$(ls -d vim* | head -1)
-            zip -9 -r -q $out "$rt"
+            ( cd "$rt" && zip -9 -r -q "$out" . )
             if [ ! -f $out ] && [ -f $out.zip ]; then mv $out.zip $out; fi
           '';
         in
         {
           postPatch = (old.postPatch or "") + ''
-            echo "==> inject unpins VFS sources"
-            cp ${./unpins_vfs.h}            src/unpins_vfs.h
-            cp ${./unpins_vfs_hooks.h}      src/unpins_vfs_hooks.h
-            cp ${./unpins_vfs.c}            src/unpins_vfs.c
+            echo "==> inject unpin-vfs core (vfs.c + miniz.c, routed via ld --wrap)"
+            cp ${./vfs.c}                   src/vfs.c
+            cp ${./vfs.h}                   src/vfs.h
             cp ${./unpins_init.c}           src/unpins_init.c
             cp ${./unpins_runtime_data.S}   src/unpins_runtime_data.S
             cp ${./miniz.h}                 src/miniz.h
@@ -45,19 +56,58 @@
             cp ${runtimeZip} src/unpins_runtime.zip
             chmod 0644 src/unpins_runtime.zip
 
-            echo "==> insert hooks include INSIDE vim.h's VIM__H guard"
-            # Critical: hook MUST be inside the guard. Outside, xdiff.h's
-            # recursive `#include "vim.h"` re-processes our hook but skips
-            # the guarded body; then on return to the first pass, vim.h's
-            # own `# define mch_open` rewinds our macros to libc.
-            sed -i 's|^#endif // VIM__H|#include "unpins_vfs_hooks.h"\n#endif // VIM__H|' src/vim.h
-
-            echo "==> inject unpins_init() right after mch_early_init() in main.c"
-            sed -i '0,/mch_early_init();/{s|mch_early_init();|mch_early_init();\n    unpins_init();|}' src/main.c
+            echo "==> declare + wire unpins glue into main(): xxd dispatch (pre) + env pin (post)"
+            # No vim.h macro hooks anymore -- ld --wrap intercepts vim's libc
+            # open/stat/opendir/... at link time (see patches/Makefile_append).
+            # unpins_xxd_dispatch() runs FIRST (multicall: argv[0]=="xxd" -> xxd
+            # and exit); unpins_init() runs after mch_early_init() to pin
+            # $VIMRUNTIME/$VIM at the mount root.
+            sed -i '1i extern void unpins_init(void);\nextern void unpins_xxd_dispatch(int, char **);' src/main.c
+            sed -i '0,/mch_early_init();/{s|mch_early_init();|unpins_xxd_dispatch(argc, argv);\n    mch_early_init();\n    unpins_init();|}' src/main.c
 
             echo "==> add OBJ entries + compile rules to autotools Makefile"
-            sed -i 's|$(XDIFF_OBJS_USED)|$(XDIFF_OBJS_USED) \\\n\tobjects/unpins_vfs.o \\\n\tobjects/unpins_init.o \\\n\tobjects/unpins_runtime_data.o \\\n\tobjects/miniz.o|' src/Makefile
+            sed -i 's|$(XDIFF_OBJS_USED)|$(XDIFF_OBJS_USED) \\\n\tobjects/vfs.o \\\n\tobjects/unpins_init.o \\\n\tobjects/unpins_runtime_data.o \\\n\tobjects/miniz.o \\\n\tobjects/xxd.o|' src/Makefile
             cat ${./patches/Makefile_append} >> src/Makefile
+          '' + lib.optionalString (!isDarwin) ''
+            echo "==> Linux: route vim's libc file calls into the VFS via ld --wrap"
+            printf '%s\n' \
+              'override ALL_LIBS += -Wl,--wrap=open -Wl,--wrap=stat -Wl,--wrap=lstat -Wl,--wrap=access -Wl,--wrap=opendir -Wl,--wrap=readdir -Wl,--wrap=closedir -Wl,--wrap=fopen' >> src/Makefile
+          '' + lib.optionalString (!isDarwin && is32bit) ''
+            echo "==> 32-bit musl is _REDIR_TIME64: wrap the __stat_time64 aliases too"
+            printf '%s\n' \
+              'UNPIN_VFS_DEFS += -DUNPIN_WRAP_TIME64' \
+              'override ALL_LIBS += -Wl,--wrap=__stat_time64 -Wl,--wrap=__lstat_time64' >> src/Makefile
+          '';
+
+          # macOS: vim built+linked once already (with real libc refs and our
+          # vfs.o present but unreferenced). Now rewrite each vim object's libc
+          # file references to the _unpinvfs_* shims and relink. vfs.o/miniz.o/
+          # unpins_*.o are left untouched, so the shims' own REAL_* calls still
+          # resolve to libc. x86_64-darwin carries the $INODE64 ABI suffix on
+          # stat/lstat/opendir/readdir; aarch64-darwin uses the plain names —
+          # list both (--redefine-sym no-ops on absent symbols), so one block
+          # covers both arches. xxd.o is rewritten too, but only ever sees real
+          # paths, so the shims fall through to libc (same as the Linux --wrap).
+          postBuild = lib.optionalString isDarwin ''
+            echo "==> macOS: redefine vim's libc file refs -> _unpinvfs_*, then relink"
+            for o in src/objects/*.o; do
+              case "$o" in
+                */vfs.o|*/miniz.o|*/unpins_init.o|*/unpins_runtime_data.o) continue ;;
+              esac
+              ${objcopy} \
+                --redefine-sym _open=_unpinvfs_open \
+                --redefine-sym _access=_unpinvfs_access \
+                --redefine-sym _fopen=_unpinvfs_fopen \
+                --redefine-sym _closedir=_unpinvfs_closedir \
+                --redefine-sym '_stat$INODE64=_unpinvfs_stat'       --redefine-sym _stat=_unpinvfs_stat \
+                --redefine-sym '_lstat$INODE64=_unpinvfs_lstat'     --redefine-sym _lstat=_unpinvfs_lstat \
+                --redefine-sym '_opendir$INODE64=_unpinvfs_opendir' --redefine-sym _opendir=_unpinvfs_opendir \
+                --redefine-sym '_readdir$INODE64=_unpinvfs_readdir' --redefine-sym _readdir=_unpinvfs_readdir \
+                "$o"
+            done
+            echo "==> macOS: relink vim against the rewritten objects"
+            rm -f src/vim
+            make -C src -j''${NIX_BUILD_CORES:-1}
           '';
 
           # The runtime tree is now embedded — drop the on-disk copy so the
@@ -75,14 +125,27 @@
       name = "vim";
 
       # Native (Linux + Darwin) — start from pkgsStatic.vim (already cached
-      # on the binary cache) and layer VFS on top.
-      build = pkgs: injectVfs pkgs pkgs.pkgsStatic.vim;
+      # on the binary cache), layer the VFS on top, then declare `xxd` as an
+      # unpin alias. xxd is FOLDED into the vim binary (objects/xxd.o + argv[0]
+      # dispatch), so there's no separate xxd file to harvest — hence the
+      # explicit `aliases = [ "xxd" ]` (auto-harvest can't see it: nixpkgs moves
+      # the standalone xxd to its own output in postFixup). unpin creates the
+      # `xxd -> vim` command at install time; the binary dispatches on argv[0].
+      build = pkgs:
+        unpins-lib.lib.withAliases pkgs
+          { primary = "vim"; aliases = [ "xxd" ]; }
+          (injectVfs pkgs pkgs.pkgsStatic.vim);
 
-      # Windows — Make_ming.mak cross build, same VFS sources, same ELF/PE
-      # symbol shape. mch_fopen/mch_open are real functions in os_win32.c
-      # on Windows (they wrap _wfopen/_wopen for wide-char paths), so we
-      # don't redirect them via macro and instead patch the function bodies
-      # to dispatch virtual paths at entry.
+      # Windows — Make_ming.mak cross build, same unpin-vfs core. There is no
+      # win32_* layer to `ld --wrap` (that's perl's shape), and vim canonicalises
+      # virtual paths to "C:\<marker>\…", so the core is built in marker mode
+      # (-DUNPIN_VFS_WIN_MARKER): unpin_vfs_is_virtual matches the marker anywhere
+      # in the path, and the explicit unpin_vfs_* API materialises to a temp file
+      # and serves it from the CRT. mch_open/mch_fopen (real functions in
+      # os_win32.c that wrap _wopen/_wfopen for wide-char paths) get a
+      # virtual-path fast path patched in at entry. xxd is folded in just like
+      # the native build (objx86-64/xxd.o + argv[0] dispatch) and exposed as an
+      # unpin alias; the console (GUI=no) binary runs xxd fine.
       windowsBuild = pkgs:
         let
           cross = pkgs.pkgsCross.mingwW64;
@@ -93,11 +156,13 @@
           } ''
             cd ${pkgs.vim}/share/vim
             rt=$(ls -d vim* | head -1)
-            zip -9 -r -q $out "$rt"
+            ( cd "$rt" && zip -9 -r -q "$out" . )
             if [ ! -f $out ] && [ -f $out.zip ]; then mv $out.zip $out; fi
           '';
         in
-        cross.stdenv.mkDerivation {
+        unpins-lib.lib.withAliases pkgs
+          { primary = "vim"; aliases = [ "xxd" ]; }
+          (cross.stdenv.mkDerivation {
           pname = "vim";
           inherit (pkgs.vim) version src;
 
@@ -107,10 +172,9 @@
           enableParallelBuilding = true;
 
           postPatch = ''
-            echo "==> inject unpins VFS sources"
-            cp ${./unpins_vfs.h}            src/unpins_vfs.h
-            cp ${./unpins_vfs_hooks.h}      src/unpins_vfs_hooks.h
-            cp ${./unpins_vfs.c}            src/unpins_vfs.c
+            echo "==> inject unpin-vfs core sources"
+            cp ${./vfs.h}                   src/vfs.h
+            cp ${./vfs.c}                   src/vfs.c
             cp ${./unpins_init.c}           src/unpins_init.c
             cp ${./unpins_runtime_data.S}   src/unpins_runtime_data.S
             cp ${./miniz.h}                 src/miniz.h
@@ -120,28 +184,57 @@
             cp ${runtimeZip} src/unpins_runtime.zip
             chmod 0644 src/unpins_runtime.zip
 
-            echo "==> insert hooks include inside VIM__H guard"
-            sed -i 's|^#endif // VIM__H|#include "unpins_vfs_hooks.h"\n#endif // VIM__H|' src/vim.h
-
-            echo "==> inject unpins_init() right after mch_early_init() in main.c"
+            echo "==> declare + wire unpins glue into VimMain(): env pin + xxd dispatch"
+            # On Windows, VimMain() ignores the argv it is handed and re-fetches
+            # the real (wide) command line with get_cmd_argsW() -- AFTER
+            # mch_early_init(). So pin the env after mch_early_init (as on Unix),
+            # but dispatch xxd only AFTER get_cmd_argsW(), or argv[0] is still the
+            # unreliable narrow value and never matches "xxd".
+            sed -i '1i extern void unpins_init(void);\nextern void unpins_xxd_dispatch(int, char **);' src/main.c
             sed -i '0,/mch_early_init();/{s|mch_early_init();|mch_early_init();\n    unpins_init();|}' src/main.c
+            sed -i 's|argc = get_cmd_argsW(&argv);|&\n    unpins_xxd_dispatch(argc, argv);|' src/main.c
 
-            echo "==> patch os_win32.c mch_open/mch_fopen to dispatch virtual paths"
+            echo "==> patch os_win32.c mch_open/mch_fopen to dispatch virtual paths via the VFS"
+            # No win32_* to --wrap here; give the real mch_open/mch_fopen a
+            # virtual-path fast path at entry, calling the explicit unpin_vfs_*
+            # API (declared inline -- unpin_vfs_fopen lives behind UNPIN_VFS_DIRS
+            # in vfs.h, which this TU doesn't define).
+            sed -i 's|^#include "vim.h"|#include "vim.h"\nextern int unpin_vfs_is_virtual(const char *);\nextern int unpin_vfs_open(const char *, int, ...);\nextern FILE *unpin_vfs_fopen(const char *, const char *);|' src/os_win32.c
             awk '
             /^mch_open\(const char \*name, int flags, int mode\)$/ {
                 print; getline; print;
-                print "    if (unpins_vfs_is_virtual(name))";
-                print "\treturn unpins_vfs_open(name, flags, mode);";
+                print "    if (unpin_vfs_is_virtual(name))";
+                print "\treturn unpin_vfs_open(name, flags, mode);";
                 next;
             }
             /^mch_fopen\(const char \*name, const char \*mode\)$/ {
                 print; getline; print;
-                print "    if (unpins_vfs_is_virtual(name))";
-                print "\treturn unpins_vfs_fopen(name, mode);";
+                print "    if (unpin_vfs_is_virtual(name))";
+                print "\treturn unpin_vfs_fopen(name, mode);";
                 next;
             }
             { print }' src/os_win32.c > src/os_win32.c.new
             mv src/os_win32.c.new src/os_win32.c
+
+            echo "==> patch os_mswin.c vim_stat so :runtime/:syntax resolve in the VFS"
+            # mch_stat is a macro -> vim_stat() -> stat_impl(). vim's
+            # gen_expand_wildcards verifies a (wildcard-free) runtime file with
+            # mch_getperm()->mch_stat() BEFORE sourcing it, so without this the
+            # whole runtime tree (syntax/menu/ftplugin/indent) is invisible.
+            # Materialise the virtual path to a temp and let vim's own stat_impl
+            # fill its stat_T (avoids re-deriving the struct layout here).
+            sed -i 's|^#include "vim.h"|#include "vim.h"\nextern int unpin_vfs_is_virtual(const char *);\nextern const char *unpin_vfs_winpath(const char *);|' src/os_mswin.c
+            awk '
+            /^vim_stat\(const char \*name, stat_T \*stp\)$/ {
+                print; getline; print;
+                print "    if (unpin_vfs_is_virtual(name)) {";
+                print "\tconst char *__m = unpin_vfs_winpath(name);";
+                print "\treturn __m ? stat_impl(__m, stp, TRUE) : -1;";
+                print "    }";
+                next;
+            }
+            { print }' src/os_mswin.c > src/os_mswin.c.new
+            mv src/os_mswin.c.new src/os_mswin.c
 
             echo "==> add OBJ entries to Make_cyg_ming.mak"
             cat ${./patches/Make_cyg_ming_append} >> src/Make_cyg_ming.mak
@@ -151,16 +244,25 @@
             runHook preBuild
 
             # Pre-build our objects into OUTDIR (objx86-64 for ARCH=x86-64).
-            # Make_ming.mak's pattern rule doesn't carry the miniz defines,
+            # Make_ming.mak's pattern rule doesn't carry the VFS/miniz defines,
             # so the explicit compile here is the simplest reliable hook.
             mkdir -p src/objx86-64
             MINIZ_DEFS='-DMINIZ_NO_TIME -DMINIZ_NO_ARCHIVE_WRITING_APIS -DMINIZ_NO_ZLIB_APIS -DMINIZ_NO_ZLIB_COMPATIBLE_NAMES'
             CFLAGS_BASE='-I. -O2 -march=x86-64 -DWIN32 -DWINVER=0x0601 -D_WIN32_WINNT=0x0601'
+            # The string-literal -D flags are written inline (single quotes round
+            # the double quotes) so the C string survives the shell intact -- the
+            # same form the native Makefile_append uses. Routing through a shell
+            # variable would leave literal quotes and mangle the macro.
             ( cd src && \
-              ${prefix}-gcc -c $CFLAGS_BASE $MINIZ_DEFS -o objx86-64/unpins_vfs.o            unpins_vfs.c          && \
-              ${prefix}-gcc -c $CFLAGS_BASE             -o objx86-64/unpins_init.o           unpins_init.c         && \
-              ${prefix}-gcc -c $CFLAGS_BASE $MINIZ_DEFS -w -o objx86-64/miniz.o              miniz.c               && \
-              ${prefix}-gcc -c $CFLAGS_BASE             -o objx86-64/unpins_runtime_data.o   unpins_runtime_data.S )
+              ${prefix}-gcc -c $CFLAGS_BASE \
+                -DUNPIN_VFS_WIN_MARKER='"__unpins_vimruntime__"' \
+                -DUNPIN_VFS_ROOT='"/__unpins_vimruntime__/"' \
+                -DUNPIN_VFS_BLOB_SYM=unpins_runtime_zip \
+                $MINIZ_DEFS -o objx86-64/vfs.o                vfs.c                 && \
+              ${prefix}-gcc -c $CFLAGS_BASE                    -o objx86-64/unpins_init.o        unpins_init.c         && \
+              ${prefix}-gcc -c $CFLAGS_BASE $MINIZ_DEFS -w     -o objx86-64/miniz.o              miniz.c               && \
+              ${prefix}-gcc -c $CFLAGS_BASE -Dmain=xxd_main -w -o objx86-64/xxd.o                xxd/xxd.c             && \
+              ${prefix}-gcc -c $CFLAGS_BASE                    -o objx86-64/unpins_runtime_data.o unpins_runtime_data.S )
 
             make -C src -f Make_ming.mak \
               FEATURES=NORMAL \
@@ -172,7 +274,7 @@
               WINDRES=${prefix}-windres \
               ARCH=x86-64 \
               -j$NIX_BUILD_CORES \
-              vim.exe xxd/xxd.exe
+              vim.exe
 
             runHook postBuild
           '';
@@ -181,12 +283,11 @@
             runHook preInstall
             mkdir -p $out/bin
             cp src/vim.exe $out/bin/vim.exe
-            cp src/xxd/xxd.exe $out/bin/xxd.exe
-            # Runtime tree is embedded — no share/vim/vim92 to ship.
+            # Runtime tree is embedded; xxd is folded in — single binary.
             runHook postInstall
           '';
 
           passthru = { pname = "vim"; inherit (pkgs.vim) version; };
-        };
+        });
     };
 }
