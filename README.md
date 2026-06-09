@@ -1,6 +1,6 @@
 # vim
 
-[Vim](https://www.vim.org/) — terminal only, no GUI. A single self-contained binary, built natively for Linux, macOS, and Windows: the whole runtime tree (`share/vim/vim92` — syntax, ftplugin, indent, doc, …) is baked in, so there's nothing to install alongside it.
+[Vim](https://www.vim.org/) — a highly configurable terminal text editor. A single self-contained binary, built natively for Linux, macOS, and Windows.
 
 [![CI](https://github.com/unpins/vim/actions/workflows/vim.yml/badge.svg)](https://github.com/unpins/vim/actions)
 ![Linux](https://img.shields.io/badge/Linux-✓-success?logo=linux&logoColor=white)
@@ -48,7 +48,6 @@ The [Releases](https://github.com/unpins/vim/releases) page has standalone binar
 
 ## Build notes
 
-- **Runtime tree embedded.** Vim's runtime directory (`share/vim/vim92`) used to ship as a companion `.tar.zst`. It is now packed to a deflate ZIP at build time and linked into the binary as an ELF/PE/Mach-O section; the shared [unpin-vfs](https://github.com/unpins/unpin-vfs) core intercepts Vim's file calls under a private marker and serves the runtime from memory. No companion file, no extract-on-first-run. `$VIMRUNTIME` resolves to a virtual path inside the binary.
-- **`xxd` is built in.** The hex-dump tool ships inside the same binary; installing Vim creates both the `vim` and `xxd` commands.
-- **Feature set differs by platform.** Linux and macOS are the **Huge** feature set (everything except the GUI); the Windows build is **Normal**. No GUI on any platform.
-- **How the runtime is routed into the VFS** differs by OS, all behind the one core: Linux uses `ld --wrap` on the libc file calls; macOS rewrites Vim's own `open`/`stat`/… references to the VFS shims with `llvm-objcopy --redefine-sym` (no `ld --wrap` on Mach-O); Windows is an `mingw` cross build where `mch_open`/`mch_fopen`/`vim_stat` are real functions (they wrap `_wopen`/`_wfopen`/`_wstat` for wide-char paths), so the VFS gets a virtual-path fast path patched into them.
+- **Runtime tree embedded.** Vim's runtime files (syntax, ftplugin, indent, help, …) are packed into a ZIP and embedded in the binary; the shared [unpin-vfs](https://github.com/unpins/unpin-vfs) core serves them from memory at runtime. There's no companion `share/vim` directory and nothing to extract on first run — `$VIMRUNTIME` points inside the binary.
+- **`xxd` included.** The `xxd` hex dumper ships in the same binary; installing Vim creates both the `vim` and `xxd` commands.
+- **Feature set.** Linux and macOS ship the **Huge** feature set; Windows ships **Normal**. This is the terminal build — the graphical build is the separate [gvim](https://github.com/unpins/gvim) package.
