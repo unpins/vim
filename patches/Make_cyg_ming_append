@@ -3,6 +3,7 @@
 # The objects are compiled manually in the flake's buildPhase (see flake.nix:
 # pre-make ${mingwPrefix}-gcc calls) into $(OUTDIR). All this hook does is teach
 # Make_ming.mak's $(TARGET): $(OBJ) link rule that they belong in the final
-# binary. vfs.o + miniz.o are the consolidated core (was unpins_vfs.o); xxd.o is
+# binary. vfs.o + miniz.o + unpin_zstd.o are the consolidated core (self-EOF
+# mode: the runtime ZIP rides the binary's EOF, no blob object); xxd.o is
 # xxd_main folded in as a multicall applet (vim only -- gvim.exe omits it).
-OBJ += $(OUTDIR)/vfs.o $(OUTDIR)/unpins_init.o $(OUTDIR)/miniz.o $(OUTDIR)/unpins_runtime_data.o $(OUTDIR)/xxd.o
+OBJ += $(OUTDIR)/vfs.o $(OUTDIR)/unpins_init.o $(OUTDIR)/miniz.o $(OUTDIR)/unpin_zstd.o $(OUTDIR)/xxd.o
