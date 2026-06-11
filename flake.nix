@@ -1,5 +1,5 @@
 {
-  description = "Standalone build of Vim (single-binary, runtime tree embedded)";
+  description = "Vim (runtime tree embedded) as a single self-contained binary";
 
   nixConfig = {
     extra-substituters = [ "https://unpins.cachix.org" ];
