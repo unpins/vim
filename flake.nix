@@ -121,27 +121,35 @@
       inherit self;
       name = "vim";
 
-      # Native (Linux + Darwin) — start from pkgsStatic.vim (already cached
-      # on the binary cache), layer the VFS on top, then ONE withUnpinEmbed
-      # call builds the whole embedded container in a single pack: the runtime
-      # tree (read back by the VFS's self-EOF mode; same UNMODIFIED
-      # pkgsStatic.vim source the .incbin zip used), the `xxd` alias, and the
-      # man pages (man = true harvests the drv's own share/man, and the
-      # passthru flag makes mkStandaloneFlake skip its withMan). xxd is FOLDED
-      # into the vim binary (objects/xxd.o + argv[0] dispatch), so there's no
-      # separate xxd file to harvest — hence the explicit `aliases = [ "xxd" ]`
-      # (auto-harvest can't see it: nixpkgs moves the standalone xxd to its own
-      # output in postFixup). unpin creates the `xxd -> vim` command at install
-      # time; the binary dispatches on argv[0].
-      build = pkgs:
-        unpins-lib.lib.withUnpinEmbed pkgs
-          {
-            primary = "vim";
-            aliases = [ "xxd" ];
-            man = true;
-            runtimeStage = vimRuntimeStage pkgs.pkgsStatic.vim;
-          }
-          (injectVfs pkgs pkgs.pkgsStatic.vim);
+      # Native (Linux + Darwin) — start from pkgsStatic.vim (already cached on
+      # the binary cache) and layer the VFS on top. `build` returns this PRISTINE
+      # injectVfs base (no embed) so mkStandaloneFlake's hooks reach the compile;
+      # the embed is declared in `runtimeEmbed` below and runs once, post-build,
+      # via the shared unpinEmbedWrap (the single embed path).
+      build = pkgs: injectVfs pkgs pkgs.pkgsStatic.vim;
+
+      # The whole embedded container (one pack): the runtime tree (read back by
+      # the VFS's self-EOF mode; the same UNMODIFIED pkgsStatic.vim source the
+      # .incbin zip used), the `xxd` alias, and the man pages (man = true harvests
+      # the base's own share/man). xxd is FOLDED into the vim binary (objects/
+      # xxd.o + argv[0] dispatch), so there's no separate xxd file to harvest —
+      # hence the explicit `aliases = [ "xxd" ]` (auto-harvest can't see it:
+      # nixpkgs moves the standalone xxd to its own output). unpin creates the
+      # `xxd -> vim` command at install time; the binary dispatches on argv[0].
+      # Windows grafts the runtime + man from the NATIVE vim (host-agnostic text
+      # files; the cross build ships no man of its own).
+      runtimeEmbed = {
+        native = pkgs: base: {
+          aliases = [ "xxd" ];
+          man = true;
+          runtimeStage = vimRuntimeStage pkgs.pkgsStatic.vim;
+        };
+        windows = pkgs: base: {
+          aliases = [ "xxd" ];
+          runtimeStage = vimRuntimeStage pkgs.vim;
+          manRoot = "${pkgs.vim.man or pkgs.vim}";
+        };
+      };
 
       # Windows — Make_ming.mak cross build, same unpin-vfs core. There is no
       # win32_* layer to `ld --wrap` (that's perl's shape), and vim canonicalises
@@ -158,20 +166,7 @@
           cross = pkgs.pkgsCross.mingwW64;
           prefix = cross.stdenv.hostPlatform.config;
         in
-        unpins-lib.lib.withUnpinEmbed pkgs
-          {
-            primary = "vim";
-            aliases = [ "xxd" ];
-            # Runtime tree from the NATIVE vim (host-agnostic text files) —
-            # the same source the old .incbin zip packed.
-            runtimeStage = vimRuntimeStage pkgs.vim;
-            # Man from the same native vim — the exact store path
-            # mkStandaloneFlake's windows graft (winManGraft) would pick, but
-            # passed here so the whole container is built in this ONE call
-            # (the cross build ships no man of its own).
-            manRoot = "${pkgs.vim.man or pkgs.vim}";
-          }
-          (cross.stdenv.mkDerivation {
+        cross.stdenv.mkDerivation {
           pname = "vim";
           inherit (pkgs.vim) version src;
 
@@ -295,6 +290,6 @@
           '';
 
           passthru = { pname = "vim"; inherit (pkgs.vim) version; };
-        });
+        };
     };
 }
