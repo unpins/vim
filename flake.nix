@@ -20,6 +20,7 @@
   # runtime data changes.
   outputs = { self, unpins-lib }:
     let
+      ulib = unpins-lib.lib;
       # Stage the vim<NN>/ tree CONTENTS (no version prefix) as the ZIP root so
       # $VIMRUNTIME is exactly the mount marker -- same value the bespoke VFS
       # used. `rtSrc` is the drv whose share/vim provides the tree; chmod: the
@@ -44,14 +45,8 @@
         {
           postPatch = (old.postPatch or "") + ''
             echo "==> inject unpin-vfs core (vfs.c + miniz.c, routed via ld --wrap)"
-            cp ${./vfs.c}                   src/vfs.c
-            cp ${./vfs.h}                   src/vfs.h
-            cp ${./unpins_init.c}           src/unpins_init.c
-            cp ${./miniz.h}                 src/miniz.h
-            cp ${./miniz.c}                 src/miniz.c
-            cp ${./unpin_zstd.c}            src/unpin_zstd.c
-            cp ${./unpin_zstd.h}            src/unpin_zstd.h
-            cp ${./zstddeclib.c}            src/zstddeclib.c
+            cp ${ulib.vfsCore}/*.c ${ulib.vfsCore}/*.h src/
+            cp ${./unpins_init.c} src/unpins_init.c
 
             echo "==> declare + wire unpins glue into main(): xxd dispatch (pre) + env pin (post)"
             # No vim.h macro hooks anymore -- ld --wrap intercepts vim's libc
@@ -120,8 +115,25 @@
     unpins-lib.lib.mkStandaloneFlake {
       inherit self;
       name = "vim";
-      smoke = [ "--version" ];
-      smokePattern = "^VIM - Vi IMproved [0-9]+\\.[0-9]+";
+      # `--version` never opens the embedded runtime, so it stays green with the
+      # VFS completely unbound. This reads a runtime file through readfile() and
+      # prints the line count: ex mode (-e -s) is the only mode that writes to
+      # stdout without a /dev/stdout redir, which Windows has not got. The count
+      # must be NONZERO in the pattern — readfile() of a missing path returns an
+      # empty list, so "0 lines" is exactly what an unreachable runtime prints.
+      smoke = [
+        "-e"
+        "-s"
+        "-u"
+        "NONE"
+        "-c"
+        ''call setline(1, "unpins-runtime-ok ".len(readfile($VIMRUNTIME."/filetype.vim"))." lines")''
+        "-c"
+        "1p"
+        "-c"
+        "qa!"
+      ];
+      smokePattern = "unpins-runtime-ok [1-9][0-9]* lines";
 
       # Native (Linux + Darwin) — start from pkgsStatic.vim (already cached on
       # the binary cache) and layer the VFS on top. `build` returns this PRISTINE
@@ -179,14 +191,8 @@
 
           postPatch = ''
             echo "==> inject unpin-vfs core sources"
-            cp ${./vfs.h}                   src/vfs.h
-            cp ${./vfs.c}                   src/vfs.c
-            cp ${./unpins_init.c}           src/unpins_init.c
-            cp ${./miniz.h}                 src/miniz.h
-            cp ${./miniz.c}                 src/miniz.c
-            cp ${./unpin_zstd.c}            src/unpin_zstd.c
-            cp ${./unpin_zstd.h}            src/unpin_zstd.h
-            cp ${./zstddeclib.c}            src/zstddeclib.c
+            cp ${ulib.vfsCore}/*.c ${ulib.vfsCore}/*.h src/
+            cp ${./unpins_init.c} src/unpins_init.c
 
             echo "==> declare + wire unpins glue into VimMain(): env pin + xxd dispatch"
             # On Windows, VimMain() ignores the argv it is handed and re-fetches
