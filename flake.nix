@@ -120,6 +120,8 @@
     unpins-lib.lib.mkStandaloneFlake {
       inherit self;
       name = "vim";
+      smoke = [ "--version" ];
+      smokePattern = "^VIM - Vi IMproved [0-9]+\\.[0-9]+";
 
       # Native (Linux + Darwin) — start from pkgsStatic.vim (already cached on
       # the binary cache) and layer the VFS on top. `build` returns this PRISTINE
