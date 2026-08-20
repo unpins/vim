@@ -152,6 +152,15 @@
       # `xxd -> vim` command at install time; the binary dispatches on argv[0].
       # Windows grafts the runtime + man from the NATIVE vim (host-agnostic text
       # files; the cross build ships no man of its own).
+      # Two dead fallbacks the binary bakes: ncurses' $out/share/terminfo (the
+      # engine bakes a fallback terminfo INTO ncurses, and a user's machine has
+      # /usr/share/terminfo or $TERMINFO anyway) and vim's own
+      # $out/share/vim (the runtime tree rides the embedded VFS -- the smoke
+      # asserts it by reading filetype.vim out of $VIMRUNTIME). Neither path
+      # exists for anyone running the artifact, but Nix counted both as runtime
+      # references: 2 refs and a 77 MB closure behind a self-contained binary.
+      removeReferences = [ "ncurses-static" "vim-static" ];
+
       runtimeEmbed = {
         native = pkgs: base: {
           aliases = [ "xxd" ];
