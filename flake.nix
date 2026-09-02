@@ -165,12 +165,31 @@
         native = pkgs: base: {
           aliases = [ "xxd" ];
           man = true;
+          # The harvest probes ONE root and stops at the first with share/man,
+          # so it cannot see a page nixpkgs put in another output — and `xxd` is
+          # exactly that: folded into the binary and announced above, with its
+          # `xxd.1` in vim's `xxd` output, never in the base. So `xxd` shipped
+          # as a name the user can run and cannot read about. Join the two roots
+          # rather than replace one with the other: the base carries vim/ex/view
+          # and the rest.
+          manRoot = "${pkgs.symlinkJoin {
+            name = "vim-man-roots";
+            paths = [ base pkgs.pkgsStatic.vim.xxd ];
+          }}";
           runtimeStage = vimRuntimeStage pkgs.pkgsStatic.vim;
         };
         windows = pkgs: base: {
           aliases = [ "xxd" ];
           runtimeStage = vimRuntimeStage pkgs.vim;
-          manRoot = "${pkgs.vim.man or pkgs.vim}";
+          # Same join as `native`, for the same reason: `xxd` is announced here
+          # too and its page is in vim's `xxd` output, not in the man output
+          # this grafts from. The native fix alone left the .exe announcing a
+          # name with nothing to read — which is exactly the per-target shape
+          # of this defect class, and why the check runs per target.
+          manRoot = "${pkgs.symlinkJoin {
+            name = "vim-man-roots-windows";
+            paths = [ (pkgs.vim.man or pkgs.vim) pkgs.vim.xxd ];
+          }}";
         };
       };
 
