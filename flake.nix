@@ -31,90 +31,81 @@
         chmod -R u+w "$__unpin_stage"
       '';
 
-      injectVfs = pkgs: oldDrv: oldDrv.overrideAttrs (old:
-        let
-          lib = pkgs.lib;
-          isDarwin = pkgs.stdenv.hostPlatform.isDarwin;
-          is32bit = pkgs.stdenv.hostPlatform.is32bit;
-          # macOS has no `ld --wrap`; rewrite vim's own objects' libc file refs
-          # to the VFS shims with llvm-objcopy --redefine-sym (GNU objcopy can't
-          # touch Mach-O). buildPackages so the cross darwin targets use a tool
-          # that runs on the build host.
-          objcopy = "${pkgs.buildPackages.llvm}/bin/llvm-objcopy";
-        in
-        {
-          postPatch = (old.postPatch or "") + ''
-            echo "==> inject unpin-vfs core (vfs.c + miniz.c, routed via ld --wrap)"
-            cp ${ulib.vfsCore}/*.c ${ulib.vfsCore}/*.h src/
-            cp ${./unpins_init.c} src/unpins_init.c
+      injectVfs = pkgs: oldDrv: oldDrv.overrideAttrs (old: {
+        postPatch = (old.postPatch or "") + ''
+          echo "==> inject unpin-vfs core (vfs.c + miniz.c, bound by IR rename)"
+          cp ${ulib.vfsCore}/*.c ${ulib.vfsCore}/*.h src/
+          cp ${./unpins_init.c} src/unpins_init.c
 
-            echo "==> declare + wire unpins glue into main(): xxd dispatch (pre) + env pin (post)"
-            # No vim.h macro hooks anymore -- ld --wrap intercepts vim's libc
-            # open/stat/opendir/... at link time (see patches/Makefile_append).
-            # unpins_xxd_dispatch() runs FIRST (multicall: argv[0]=="xxd" -> xxd
-            # and exit); unpins_init() runs after mch_early_init() to pin
-            # $VIMRUNTIME/$VIM at the mount root.
-            sed -i '1i extern void unpins_init(void);\nextern void unpins_xxd_dispatch(int, char **);' src/main.c
-            sed -i '0,/mch_early_init();/{s|mch_early_init();|unpins_xxd_dispatch(argc, argv);\n    mch_early_init();\n    unpins_init();|}' src/main.c
+          echo "==> declare + wire unpins glue into main(): xxd dispatch (pre) + env pin (post)"
+          # No vim.h macro hooks: the postBuild pass below renames vim's own
+          # libc open/stat/opendir/... references to the VFS shims.
+          # unpins_xxd_dispatch() runs FIRST (multicall: argv[0]=="xxd" -> xxd
+          # and exit); unpins_init() runs after mch_early_init() to pin
+          # $VIMRUNTIME/$VIM at the mount root.
+          sed -i '1i extern void unpins_init(void);\nextern void unpins_xxd_dispatch(int, char **);' src/main.c
+          sed -i '0,/mch_early_init();/{s|mch_early_init();|unpins_xxd_dispatch(argc, argv);\n    mch_early_init();\n    unpins_init();|}' src/main.c
 
-            echo "==> add OBJ entries + compile rules to autotools Makefile"
-            sed -i 's|$(XDIFF_OBJS_USED)|$(XDIFF_OBJS_USED) \\\n\tobjects/vfs.o \\\n\tobjects/unpins_init.o \\\n\tobjects/unpin_zstd.o \\\n\tobjects/miniz.o \\\n\tobjects/xxd.o|' src/Makefile
-            cat ${./patches/Makefile_append} >> src/Makefile
-          '' + lib.optionalString (!isDarwin) ''
-            echo "==> Linux: route vim's libc file calls into the VFS via ld --wrap"
-            printf '%s\n' \
-              'override ALL_LIBS += -Wl,--wrap=open -Wl,--wrap=stat -Wl,--wrap=lstat -Wl,--wrap=access -Wl,--wrap=opendir -Wl,--wrap=readdir -Wl,--wrap=closedir -Wl,--wrap=fopen' >> src/Makefile
-          '' + lib.optionalString (!isDarwin && is32bit) ''
-            echo "==> 32-bit musl is _REDIR_TIME64: wrap the __stat_time64 aliases too"
-            printf '%s\n' \
-              'UNPIN_VFS_DEFS += -DUNPIN_WRAP_TIME64' \
-              'override ALL_LIBS += -Wl,--wrap=__stat_time64 -Wl,--wrap=__lstat_time64' >> src/Makefile
-          '';
+          echo "==> add OBJ entries + compile rules to autotools Makefile"
+          sed -i 's|$(XDIFF_OBJS_USED)|$(XDIFF_OBJS_USED) \\\n\tobjects/vfs.o \\\n\tobjects/unpins_init.o \\\n\tobjects/unpin_zstd.o \\\n\tobjects/miniz.o \\\n\tobjects/xxd.o|' src/Makefile
+          cat ${./patches/Makefile_append} >> src/Makefile
+        '';
 
-          # macOS: vim built+linked once already (with real libc refs and our
-          # vfs.o present but unreferenced). Now rewrite each vim object's libc
-          # file references to the _unpinvfs_* shims and relink. vfs.o/miniz.o/
-          # unpins_*.o are left untouched, so the shims' own REAL_* calls still
-          # resolve to libc. x86_64-darwin carries the $INODE64 ABI suffix on
-          # stat/lstat/opendir/readdir; aarch64-darwin uses the plain names —
-          # list both (--redefine-sym no-ops on absent symbols), so one block
-          # covers both arches. xxd.o is rewritten too, but only ever sees real
-          # paths, so the shims fall through to libc (same as the Linux --wrap).
-          postBuild = lib.optionalString isDarwin ''
-            echo "==> macOS: redefine vim's libc file refs -> _unpinvfs_*, then relink"
-            for o in src/objects/*.o; do
-              case "$o" in
-                */vfs.o|*/miniz.o|*/unpin_zstd.o|*/unpins_init.o) continue ;;
-              esac
-              ${objcopy} \
-                --redefine-sym _open=_unpinvfs_open \
-                --redefine-sym _access=_unpinvfs_access \
-                --redefine-sym _fopen=_unpinvfs_fopen \
-                --redefine-sym _closedir=_unpinvfs_closedir \
-                --redefine-sym '_stat$INODE64=_unpinvfs_stat'       --redefine-sym _stat=_unpinvfs_stat \
-                --redefine-sym '_lstat$INODE64=_unpinvfs_lstat'     --redefine-sym _lstat=_unpinvfs_lstat \
-                --redefine-sym '_opendir$INODE64=_unpinvfs_opendir' --redefine-sym _opendir=_unpinvfs_opendir \
-                --redefine-sym '_readdir$INODE64=_unpinvfs_readdir' --redefine-sym _readdir=_unpinvfs_readdir \
-                "$o"
-            done
-            echo "==> macOS: relink vim against the rewritten objects"
-            rm -f src/vim
-            make -C src -j''${NIX_BUILD_CORES:-1}
-          '';
+        # ONE binding for every native target, and it has to be one: under the
+        # engine every object here is LLVM bitcode, and the IR rename is the
+        # only back-end that reaches a bitcode symtab. It replaces two
+        # mechanisms this build used to carry — `ld --wrap` on Linux and
+        # llvm-objcopy --redefine-sym on macOS, which cannot touch bitcode at
+        # all. vim's own libc file-op references are pointed at the unpinvfs_*
+        # shims vfs.c defines under -DUNPIN_VFS_NOWRAP.
+        #
+        # The rename reaches only what is rewritten here, where --wrap bound
+        # the whole link. That is enough: everything vim reads from the mount
+        # it reads from its OWN code (:source, readfile(), the wildcard
+        # expansion behind glob()). The spellings come from nix-lib because
+        # they are the fix-prone part — darwin's stat/lstat differ by arch
+        # (x86_64 keeps the legacy inode32 ABI, so the alias is
+        # `_stat$INODE64`; arm64 has the plain `_stat`) and 32-bit musl renames
+        # them again to `__stat_time64`.
+        postBuild = (old.postBuild or "") + ''
+          ${ulib.vfsBindFns {
+              syms = [ "open" "fopen" "stat" "lstat" "access"
+                       "opendir" "readdir" "closedir" ];
+            }}
+          MT=${ulib.unpinToolchain pkgs.stdenv.buildPlatform.system}/bin/llvm
 
-          # The runtime tree is now embedded — drop the on-disk copy so the
-          # install is truly single-file.
-          postInstall = (old.postInstall or "") + ''
-            echo "==> prune embedded-into-binary runtime tree from \$out"
-            rm -rf $out/share/vim/vim*
-            rm -f  $out/share/vim/vimrc
-            rmdir  $out/share/vim 2>/dev/null || true
-          '';
-        });
+          echo "==> bind the VFS: rename vim's libc file-op refs in the IR"
+          # NOT the VFS objects themselves — vfs.c calls the genuine libc, so
+          # renaming its references would make each shim call itself. xxd.o IS
+          # renamed, but only ever sees real paths, so the shims fall through.
+          for o in src/objects/*.o; do
+            case "$o" in */vfs.o|*/miniz.o|*/unpin_zstd.o|*/unpins_init.o) continue ;; esac
+            # Not a warning: a non-bitcode object means the package set left
+            # the engine, and then nothing is renamed and the VFS is silently
+            # dead — the binary still builds and $VIMRUNTIME reads nothing.
+            isbc "$o" || { echo "FATAL: $o is not bitcode; is vim still on the unpin-llvm engine?" >&2; exit 1; }
+            bcrewrite "$o"
+          done
+
+          echo "==> relink vim against the rewritten objects"
+          rm -f src/vim
+          make -C src -j''${NIX_BUILD_CORES:-1}
+        '';
+
+        # The runtime tree is now embedded — drop the on-disk copy so the
+        # install is truly single-file.
+        postInstall = (old.postInstall or "") + ''
+          echo "==> prune embedded-into-binary runtime tree from \$out"
+          rm -rf $out/share/vim/vim*
+          rm -f  $out/share/vim/vimrc
+          rmdir  $out/share/vim 2>/dev/null || true
+        '';
+      });
     in
     unpins-lib.lib.mkStandaloneFlake {
       inherit self;
       name = "vim";
+      engine = "unpin-llvm";
       # `--version` never opens the embedded runtime, so it stays green with the
       # VFS completely unbound. This reads a runtime file through readfile() and
       # prints the line count: ex mode (-e -s) is the only mode that writes to

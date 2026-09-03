@@ -2,11 +2,12 @@
  *
  * Called once from main() right after mch_early_init(). The runtime tree lives
  * in the binary's single embedded metadata/runtime ZIP, appended at EOF by the
- * nix build (withRuntimeData); the unpin-vfs core (vfs.c in self-EOF mode,
- * linked via `ld --wrap`) reads the running executable back and serves every
- * libc open/stat/opendir/... whose path falls under the mount root. All this
+ * nix build (withRuntimeData); the unpin-vfs core (vfs.c in self-EOF mode)
+ * reads the running executable back and serves every open/stat/opendir/... whose
+ * path falls under the mount root -- vim's own calls reach it because the build
+ * renames their libc references to the core's shims (see flake.nix). All this
  * glue does is pin $VIMRUNTIME/$VIM at that root so vim's runtime discovery
- * produces paths the wrappers intercept.
+ * produces paths the shims intercept.
  *
  * The mount root must match -DUNPIN_VFS_ROOT passed to vfs.c (see flake.nix).
  * The runtime ZIP holds the vim92/ tree CONTENTS directly (no version prefix),
@@ -68,7 +69,7 @@ void unpins_init(void)
     if (dbg) fprintf(stderr, "[unpins] unpins_init called\n");
 
     /* Fail fast (and visibly under UNPINS_DEBUG) if the embedded blob is
-     * unusable; the wrappers would otherwise just lazily ENOENT later. */
+     * unusable; the shims would otherwise just lazily ENOENT later. */
     if (!unpin_vfs_init()) {
         if (dbg) fprintf(stderr, "[unpins] unpin_vfs_init failed\n");
         return;

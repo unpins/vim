@@ -1,16 +1,17 @@
 
 # === unpin-vfs compile rules (consolidated core; see github:unpins/unpin-vfs) ===
-# vfs.c + miniz.c replace the old bespoke unpins_vfs.c. Routing is via `ld
-# --wrap` (below) instead of vim.h macro hooks, so no header is injected into
-# vim's TUs. Self-EOF mode (-DUNPIN_VFS_SELF): the runtime tree is no longer a
-# .incbin section — the nix build appends it to the finished binary as the
-# single metadata/runtime ZIP (withRuntimeData), and the VFS reads it back from
-# the executable's own EOF. Entries are zstd (ZIP method 93, shared dict),
+# vfs.c + miniz.c replace the old bespoke unpins_vfs.c. Routing renames vim's
+# own libc file-op references in the IR (-DUNPIN_VFS_NOWRAP; see flake.nix)
+# instead of vim.h macro hooks, so no header is injected into vim's TUs.
+# Self-EOF mode (-DUNPIN_VFS_SELF): the runtime tree is no longer a .incbin
+# section — the nix build appends it to the finished binary as the single
+# metadata/runtime ZIP (withRuntimeData), and the VFS reads it back from the
+# executable's own EOF. Entries are zstd (ZIP method 93, shared dict),
 # decoded by the vendored decompress-only zstddeclib.c — still no external
 # runtime dependency.
 # vfs.c #defines _GNU_SOURCE itself, so don't pass -D_GNU_SOURCE here (would
 # warn on redefinition). _GNU_SOURCE IS passed for miniz.o / unpins_init.o.
-UNPIN_VFS_DEFS = -DUNPIN_VFS_DIRS -DUNPIN_VFS_SELF \
+UNPIN_VFS_DEFS = -DUNPIN_VFS_DIRS -DUNPIN_VFS_SELF -DUNPIN_VFS_NOWRAP \
 	-DUNPIN_VFS_ROOT='"/__unpins_vimruntime__/"'
 MINIZ_DEFS = -DMINIZ_USE_ZSTD -DMINIZ_NO_TIME -DMINIZ_NO_ARCHIVE_WRITING_APIS -DMINIZ_NO_ZLIB_APIS -DMINIZ_NO_ZLIB_COMPATIBLE_NAMES
 
@@ -29,21 +30,17 @@ objects/unpins_init.o: unpins_init.c vfs.h
 # xxd folded in as a multicall applet: compile xxd/xxd.c with its main() renamed
 # to xxd_main and link it INTO vim (added to OBJ). unpins_xxd_dispatch()
 # (unpins_init.c) routes argv[0]=="xxd" to it. xxd's file I/O is all on real
-# paths, so the VFS interception (ld --wrap on Linux / redefine-sym on macOS)
-# falls through (is_virtual()=false). The standalone xxd the autotools build
-# still produces is moved to the unused `xxd` output by nixpkgs postFixup and
-# dropped by strippedOrJoined. -w: xxd.c is upstream-clean for its own build;
-# silence vim's stricter warning set here.
+# paths, so the VFS interception falls through (is_virtual()=false). The
+# standalone xxd the autotools build still produces is moved to the unused `xxd`
+# output by nixpkgs postFixup and dropped by strippedOrJoined. -w: xxd.c is
+# upstream-clean for its own build; silence vim's stricter warning set here.
 objects/xxd.o: xxd/xxd.c
 	$(CCC_NF) $(ALL_CFLAGS) -Dmain=xxd_main -w -o $@ xxd/xxd.c
 
-# NOTE: the link-time routing differs by OS and is appended by flake.nix, not
-# here, because this file is shared by every native target:
-#   - Linux : `override ALL_LIBS += -Wl,--wrap=open …` (ld --wrap). The vim link
-#     uses $(CClink) … $(OBJ) $(ALL_LIBS); the standalone xxd sub-make does NOT
-#     (it inherits only CC/CFLAGS/LDFLAGS), so the unused standalone xxd links
-#     clean. The xxd_main FOLDED into vim is under the wraps but only touches
-#     real paths, so they fall through.
-#   - macOS : no ld --wrap. flake.nix's darwin postBuild rewrites vim's own
-#     objects' libc refs (open/stat/… -> _unpinvfs_*) with llvm-objcopy
-#     --redefine-sym, then relinks; our vfs.o keeps the real libc symbols.
+# NOTE: the binding is appended by flake.nix, not here, because this file is
+# shared by every native target -- but it is now ONE binding for all of them:
+# nix-lib's shared IR rename (lib.vfsBindFns) points vim's own libc file-op
+# references at the unpinvfs_* shims. The standalone xxd sub-make links against
+# the untouched objects it compiles itself, so it keeps the real libc; the
+# xxd_main FOLDED into vim goes through the shims but only ever sees real paths,
+# so they fall through.
