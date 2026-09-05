@@ -25,7 +25,9 @@ unpin install vim
 
 ## Man pages
 
-`vim.1` (and `vimdiff`, `ex`, `view`, `rvim`, `rview`, `evim`, `vimtutor`) are embedded in the binary — read one with `unpin man vim`, e.g. `unpin man vim vimdiff`.
+`vim.1` is embedded in the binary — read it with `unpin man vim`. So are the
+pages for `xxd` and for Vim's other modes (`vimdiff`, `ex`, `view`, `rvim`,
+`rview`, `evim`), which you reach with a flag: `unpin man vim vimdiff`.
 
 ## Build locally
 

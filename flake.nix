@@ -31,6 +31,24 @@
         chmod -R u+w "$__unpin_stage"
       '';
 
+      # Join the man roots and drop vimtutor.1. The other eight pages describe
+      # modes this very binary reaches -- `vim -e` (ex), `-R` (view), `-Z`
+      # (rvim/rview), `-d` (vimdiff), `-y` (evim), plus xxd, which is folded in
+      # and announced. vimtutor is a shell script: not shipped, no flag, so its
+      # page documented something the user cannot run.
+      manRoots = pkgs: name: paths:
+        pkgs.buildPackages.runCommand name { } ''
+          mkdir -p $out/share/man/man1
+          for __r in ${builtins.concatStringsSep " " (map toString paths)}; do
+            [ -d "$__r/share/man/man1" ] || continue
+            cp -a "$__r"/share/man/man1/*.1* $out/share/man/man1/ 2>/dev/null || true
+          done
+          chmod -R u+w $out
+          rm -f $out/share/man/man1/vimtutor.1*
+          [ -e $out/share/man/man1/vim.1 ] || [ -e $out/share/man/man1/vim.1.gz ] \
+            || { echo "manRoots: no vim.1 harvested" >&2; exit 1; }
+        '';
+
       injectVfs = pkgs: oldDrv: oldDrv.overrideAttrs (old: {
         postPatch = (old.postPatch or "") + ''
           echo "==> inject unpin-vfs core (vfs.c + miniz.c, bound by IR rename)"
@@ -163,10 +181,7 @@
           # as a name the user can run and cannot read about. Join the two roots
           # rather than replace one with the other: the base carries vim/ex/view
           # and the rest.
-          manRoot = "${pkgs.symlinkJoin {
-            name = "vim-man-roots";
-            paths = [ base pkgs.pkgsStatic.vim.xxd ];
-          }}";
+          manRoot = "${manRoots pkgs "vim-man-roots" [ base pkgs.pkgsStatic.vim.xxd ]}";
           runtimeStage = vimRuntimeStage pkgs.pkgsStatic.vim;
         };
         windows = pkgs: base: {
@@ -177,10 +192,8 @@
           # this grafts from. The native fix alone left the .exe announcing a
           # name with nothing to read — which is exactly the per-target shape
           # of this defect class, and why the check runs per target.
-          manRoot = "${pkgs.symlinkJoin {
-            name = "vim-man-roots-windows";
-            paths = [ (pkgs.vim.man or pkgs.vim) pkgs.vim.xxd ];
-          }}";
+          manRoot = "${manRoots pkgs "vim-man-roots-windows"
+            [ (pkgs.vim.man or pkgs.vim) pkgs.vim.xxd ]}";
         };
       };
 
