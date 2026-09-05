@@ -252,18 +252,57 @@
             # whole runtime tree (syntax/menu/ftplugin/indent) is invisible.
             # Materialise the virtual path to a temp and let vim's own stat_impl
             # fill its stat_T (avoids re-deriving the struct layout here).
-            sed -i 's|^#include "vim.h"|#include "vim.h"\nextern int unpin_vfs_is_virtual(const char *);\nextern const char *unpin_vfs_winpath(const char *);|' src/os_mswin.c
+            sed -i 's|^#include "vim.h"|#include "vim.h"\nextern int unpin_vfs_is_virtual(const char *);\nextern const char *unpin_vfs_winpath(const char *);\nextern int unpin_vfs_win_isdir(const char *);|' src/os_mswin.c
             awk '
             /^vim_stat\(const char \*name, stat_T \*stp\)$/ {
                 print; getline; print;
                 print "    if (unpin_vfs_is_virtual(name)) {";
                 print "\tconst char *__m = unpin_vfs_winpath(name);";
-                print "\treturn __m ? stat_impl(__m, stp, TRUE) : -1;";
+                print "\tif (__m) return stat_impl(__m, stp, TRUE);";
+                print "\tif (unpin_vfs_win_isdir(name)) {";
+                print "\t    memset(stp, 0, sizeof(*stp));";
+                print "\t    stp->st_mode = S_IFDIR | 0555;";
+                print "\t    stp->st_nlink = 1;";
+                print "\t    return 0;";
+                print "\t}";
+                print "\treturn -1;";
                 print "    }";
                 next;
             }
             { print }' src/os_mswin.c > src/os_mswin.c.new
             mv src/os_mswin.c.new src/os_mswin.c
+            grep -q 'unpin_vfs_win_isdir' src/os_mswin.c \
+              || { echo "vim_stat directory branch did not apply" >&2; exit 1; }
+
+            echo "==> route the win32 directory test (mch_isdir) through the VFS"
+            # mch_isdir does NOT go through stat: it asks GetFileAttributesW,
+            # which the kernel answers only for a path on disk. So every
+            # directory under the mount read as "does not exist", and
+            # `:packadd matchit` -- which tests pack/*/opt/<name> as a
+            # DIRECTORY -- found nothing, along with every other directory test.
+            for __f in src/os_win32.c src/os_mswin.c; do
+              sed -i 's|^#include "vim.h"|#include "vim.h"\nextern DWORD unpin_vfs_get_file_attributes_w(const wchar_t *);\n#define GetFileAttributesW unpin_vfs_get_file_attributes_w|' "$__f"
+              grep -q 'unpin_vfs_get_file_attributes_w' "$__f" \
+                || { echo "GetFileAttributesW redirect did not apply to $__f" >&2; exit 1; }
+            done
+
+            echo "==> route the win32 directory scans through the VFS"
+            # Two functions scan a directory on Windows, both by asking the
+            # kernel through FindFirstFileW, which answers for real directories
+            # only: dos_expandpath (filepath.c -- every wildcard vim expands)
+            # and readdir_core (fileio.c -- the readdir()/readdirex()
+            # builtins). So every glob under the mount came back empty while
+            # the same files opened fine by exact name: `:colorscheme <Tab>`
+            # and `:syntax <Tab>` offered nothing, `readdir($VIMRUNTIME)` was
+            # []. The shim serves virtual directories from the ZIP and forwards
+            # every other pattern to the real API, so redirecting the names for
+            # the whole file is safe; the backup/tempname uses in other files
+            # are left alone.
+            for __f in src/filepath.c src/fileio.c; do
+              sed -i 's|^#include "vim.h"|#include "vim.h"\n#include <windows.h>\nextern HANDLE unpin_vfs_find_first_w(const wchar_t *, WIN32_FIND_DATAW *);\nextern BOOL unpin_vfs_find_next_w(HANDLE, WIN32_FIND_DATAW *);\nextern BOOL unpin_vfs_find_close(HANDLE);\n#define FindFirstFileW unpin_vfs_find_first_w\n#define FindNextFileW  unpin_vfs_find_next_w\n#define FindClose      unpin_vfs_find_close|' "$__f"
+              grep -q 'unpin_vfs_find_first_w' "$__f" \
+                || { echo "Find* redirect did not apply to $__f" >&2; exit 1; }
+            done
 
             echo "==> add OBJ entries to Make_cyg_ming.mak"
             cat ${./patches/Make_cyg_ming_append} >> src/Make_cyg_ming.mak
