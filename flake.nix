@@ -130,19 +130,26 @@
       # stdout without a /dev/stdout redir, which Windows has not got. The count
       # must be NONZERO in the pattern — readfile() of a missing path returns an
       # empty list, so "0 lines" is exactly what an unreachable runtime prints.
+      #
+      # The SECOND count is there because reading a file by name and SEARCHING a
+      # directory are different code paths, and Windows had only the first: the
+      # runtime read back fine while every glob under the mount returned
+      # nothing, so `:packadd` and every <Tab> completion came up empty and this
+      # smoke stayed green through all of it. getcompletion() globs
+      # colors/*.vim, so an unsearchable runtime prints "0 colors".
       smoke = [
         "-e"
         "-s"
         "-u"
         "NONE"
         "-c"
-        ''call setline(1, "unpins-runtime-ok ".len(readfile($VIMRUNTIME."/filetype.vim"))." lines")''
+        ''call setline(1, "unpins-runtime-ok ".len(readfile($VIMRUNTIME."/filetype.vim"))." lines ".len(getcompletion("", "color"))." colors")''
         "-c"
         "1p"
         "-c"
         "qa!"
       ];
-      smokePattern = "unpins-runtime-ok [1-9][0-9]* lines";
+      smokePattern = "unpins-runtime-ok [1-9][0-9]* lines [1-9][0-9]* colors";
 
       # Native (Linux + Darwin) — start from pkgsStatic.vim (already cached on
       # the binary cache) and layer the VFS on top. `build` returns this PRISTINE
