@@ -52,4 +52,4 @@ The [Releases](https://github.com/unpins/vim/releases) page has standalone binar
 
 - **Runtime tree embedded.** Vim's runtime files (syntax, ftplugin, indent, help, …) are packed into a ZIP and embedded in the binary; the shared [unpin-vfs](https://github.com/unpins/unpin-vfs) core serves them from memory at runtime. There's no companion `share/vim` directory and nothing to extract on first run — `$VIMRUNTIME` points inside the binary.
 - **`xxd` included.** The `xxd` hex dumper ships in the same binary; installing Vim creates both the `vim` and `xxd` commands.
-- **Feature set.** Linux and macOS ship the **Huge** feature set; Windows ships **Normal**. This is the terminal build — the graphical build is the separate [gvim](https://github.com/unpins/gvim) package.
+- **Feature set.** Linux and macOS ship the **Huge** feature set; Windows ships **Normal**. The scripting interpreters (Lua, Python, Ruby, Perl, Tcl) are not compiled in either way — they would tie the binary to whatever versions the machine happens to have. This is the terminal build; the graphical build is the separate [gvim](https://github.com/unpins/gvim) package.
