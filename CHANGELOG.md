@@ -19,6 +19,7 @@
 
 ### Changed
 
+- Updated to Vim 9.2.0541.
 - The Linux and macOS binaries are now built by the unpin-llvm engine (clang
   with full LTO) instead of nixpkgs' gcc. Windows is unaffected — it has always
   been its own separate build.
