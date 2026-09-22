@@ -124,6 +124,11 @@
       inherit self;
       name = "vim";
       engine = "unpin-llvm";
+      multicall = {
+        # The `.exe` on the engine too, not the nixpkgs mingw-gcc cross.
+        windows = true;
+        programs = [{ name = "vim"; }];
+      };
       # `--version` never opens the embedded runtime, so it stays green with the
       # VFS completely unbound. This reads a runtime file through readfile() and
       # prints the line count: ex mode (-e -s) is the only mode that writes to
@@ -243,6 +248,16 @@
             sed -i '0,/mch_early_init();/{s|mch_early_init();|mch_early_init();\n    unpins_init();|}' src/main.c
             sed -i 's|argc = get_cmd_argsW(&argv);|&\n    unpins_xxd_dispatch(argc, argv);|' src/main.c
 
+            echo "==> enter through main(), not wmain()"
+            # The multicall module takes the program's entry from `main`. vim's
+            # wmain() ignores its arguments (VimMain re-reads the command line,
+            # which the dispatcher rewrites), so a narrow main() is equivalent.
+            sed -i 's|^wmain(int argc UNUSED, wchar_t \*\*argv UNUSED)$|main(int argc UNUSED, char **argv UNUSED)|' src/os_w32exe.c
+            grep -q '^main(int argc UNUSED, char \*\*argv UNUSED)$' src/os_w32exe.c \
+              || { echo "wmain -> main did not apply" >&2; exit 1; }
+            sed -i 's|^LFLAGS += -municode$||' src/Make_cyg_ming.mak
+            if grep -q '^LFLAGS += -municode' src/Make_cyg_ming.mak; then echo "-municode not dropped" >&2; exit 1; fi
+
             echo "==> patch os_win32.c mch_open/mch_fopen to dispatch virtual paths via the VFS"
             # No win32_* to --wrap here; give the real mch_open/mch_fopen a
             # virtual-path fast path at entry, calling the explicit unpin_vfs_*
@@ -352,6 +367,7 @@
               ${prefix}-gcc -c $CFLAGS_BASE $MINIZ_DEFS -DUNPIN_ZSTD_VENDORED -w -o objx86-64/unpin_zstd.o unpin_zstd.c && \
               ${prefix}-gcc -c $CFLAGS_BASE -Dmain=xxd_main -w -o objx86-64/xxd.o                xxd/xxd.c )
 
+            # HAS_GCC_EH=no: the engine has no libgcc_eh (it unwinds with libunwind).
             make -C src -f Make_ming.mak \
               FEATURES=NORMAL \
               GUI=no \
@@ -359,6 +375,7 @@
               CROSS_COMPILE=${prefix}- \
               STATIC_STDCPLUS=yes \
               STATIC_WINPTHREAD=yes \
+              HAS_GCC_EH=no \
               WINDRES=${prefix}-windres \
               ARCH=x86-64 \
               -j$NIX_BUILD_CORES \

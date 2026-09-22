@@ -21,8 +21,15 @@
 
 - Updated to Vim 9.2.0541.
 - The Linux and macOS binaries are now built by the unpin-llvm engine (clang
-  with full LTO) instead of nixpkgs' gcc. Windows is unaffected — it has always
-  been its own separate build.
+  with full LTO) instead of nixpkgs' gcc.
+- The Windows binary is now built by the same compiler as the Linux and macOS
+  ones. Its size barely moves (15.5 MB to 15.4 MB); `--version`, the embedded
+  runtime (reading, `:packadd`, syntax highlighting), writing a file and `xxd`
+  were checked under Wine.
+
+  It now uses the Universal C Runtime, which is part of Windows 10 and later.
+  On Windows 7 or 8.1 that runtime has to be installed first — it comes through
+  Windows Update. The previous binary did not need it.
 
 - One mechanism now connects Vim's file reads to the runtime tree embedded in
   the binary, on every platform. There used to be two, one for Linux and one for
