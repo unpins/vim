@@ -127,7 +127,7 @@
       multicall = {
         # The `.exe` on the engine too, not the nixpkgs mingw-gcc cross.
         windows = true;
-        programs = [{ name = "vim"; }];
+        programs = [{ name = "vim"; aliases = [ "xxd" ]; }];
       };
       # `--version` never opens the embedded runtime, so it stays green with the
       # VFS completely unbound. This reads a runtime file through readfile() and
@@ -168,9 +168,10 @@
       # .incbin zip used), the `xxd` alias, and the man pages (man = true harvests
       # the base's own share/man). xxd is FOLDED into the vim binary (objects/
       # xxd.o + argv[0] dispatch), so there's no separate xxd file to harvest —
-      # hence the explicit `aliases = [ "xxd" ]` (auto-harvest can't see it:
-      # nixpkgs moves the standalone xxd to its own output). unpin creates the
-      # `xxd -> vim` command at install time; the binary dispatches on argv[0].
+      # hence the explicit alias on the multicall program above (auto-harvest
+      # can't see it: nixpkgs moves the standalone xxd to its own output). unpin
+      # creates the `xxd -> vim` command at install time; the binary dispatches
+      # on argv[0].
       # Windows grafts the runtime + man from the NATIVE vim (host-agnostic text
       # files; the cross build ships no man of its own).
       # Two dead fallbacks the binary bakes: ncurses' $out/share/terminfo (the
@@ -184,7 +185,6 @@
 
       runtimeEmbed = {
         native = pkgs: base: {
-          aliases = [ "xxd" ];
           man = true;
           # The harvest probes ONE root and stops at the first with share/man,
           # so it cannot see a page nixpkgs put in another output — and `xxd` is
@@ -197,7 +197,6 @@
           runtimeStage = vimRuntimeStage pkgs.pkgsStatic.vim;
         };
         windows = pkgs: base: {
-          aliases = [ "xxd" ];
           runtimeStage = vimRuntimeStage pkgs.vim;
           # Same join as `native`, for the same reason: `xxd` is announced here
           # too and its page is in vim's `xxd` output, not in the man output
