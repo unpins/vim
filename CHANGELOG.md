@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [9.2.0541-1] - 2026-09-26
+
 ### Fixed
 
 - On Windows, the bundled runtime is discoverable again, not merely readable.
