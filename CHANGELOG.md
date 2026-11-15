@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### Changed
+
+- On Windows, Vim is now the **Huge** build, like Linux and macOS: `:terminal`,
+  `term_start()`, `job_start()` and channels work (the terminal runs on
+  ConPTY), along with the rest of the Huge feature set. It was built as
+  **Normal** before, without any of them.
+
 ## [9.2.0541-1] - 2026-09-26
 
 ### Fixed

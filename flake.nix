@@ -148,13 +148,15 @@
         "-u"
         "NONE"
         "-c"
-        ''call setline(1, "unpins-runtime-ok ".len(readfile($VIMRUNTIME."/filetype.vim"))." lines ".len(getcompletion("", "color"))." colors")''
+        ''call setline(1, "unpins-runtime-ok ".len(readfile($VIMRUNTIME."/filetype.vim"))." lines ".len(getcompletion("", "color"))." colors features ".has("terminal").has("channel").has("job"))''
         "-c"
         "1p"
         "-c"
         "qa!"
       ];
-      smokePattern = "unpins-runtime-ok [1-9][0-9]* lines [1-9][0-9]* colors";
+      # `features 111`: :terminal, channels and jobs — Windows was built Normal
+      # once, without them, and nothing here noticed.
+      smokePattern = "unpins-runtime-ok [1-9][0-9]* lines [1-9][0-9]* colors features 111";
 
       # Native (Linux + Darwin) — start from pkgsStatic.vim (already cached on
       # the binary cache) and layer the VFS on top. `build` returns this PRISTINE
@@ -368,7 +370,7 @@
 
             # HAS_GCC_EH=no: the engine has no libgcc_eh (it unwinds with libunwind).
             make -C src -f Make_ming.mak \
-              FEATURES=NORMAL \
+              FEATURES=HUGE \
               GUI=no \
               CROSS=yes \
               CROSS_COMPILE=${prefix}- \
