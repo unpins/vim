@@ -224,13 +224,14 @@
         let
           cross = pkgs.pkgsCross.mingwW64;
           prefix = cross.stdenv.hostPlatform.config;
+          iconv = (ulib.mingwStaticCross pkgs).libiconv;
         in
         cross.stdenv.mkDerivation {
           pname = "vim";
           inherit (pkgs.vim) version src;
 
           dontConfigure = true;
-          buildInputs = [ cross.windows.pthreads ];
+          buildInputs = [ cross.windows.pthreads iconv ];
           strictDeps = true;
           enableParallelBuilding = true;
 
@@ -342,6 +343,14 @@
 
             echo "==> add OBJ entries to Make_cyg_ming.mak"
             cat ${./patches/Make_cyg_ming_append} >> src/Make_cyg_ming.mak
+
+            # Upstream's ICONV=yes loads iconv.dll at run time, which a single
+            # binary never has: link GNU libiconv statically (ICONV= below
+            # drops -DDYNAMIC_ICONV).
+            cat >> src/Make_cyg_ming.mak <<'MK'
+            DEFINES += -DHAVE_ICONV_H -DHAVE_ICONV
+            LIB += -liconv
+            MK
           '';
 
           buildPhase = ''
@@ -371,6 +380,7 @@
             # HAS_GCC_EH=no: the engine has no libgcc_eh (it unwinds with libunwind).
             make -C src -f Make_ming.mak \
               FEATURES=HUGE \
+              ICONV= \
               GUI=no \
               CROSS=yes \
               CROSS_COMPILE=${prefix}- \

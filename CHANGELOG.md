@@ -9,6 +9,13 @@
   ConPTY), along with the rest of the Huge feature set. It was built as
   **Normal** before, without any of them.
 
+### Fixed
+
+- On Windows, `iconv()` and every character-set conversion that goes through
+  it (`'fileencoding'` values such as `latin1`, `koi8-r` or `shift_jis`) did
+  nothing: Vim looked for an `iconv.dll` that the binary never had, and
+  `has('iconv')` was 0. The conversion library is now built in.
+
 ## [9.2.0541-1] - 2026-09-26
 
 ### Fixed
