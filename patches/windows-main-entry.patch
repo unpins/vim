@@ -1,0 +1,27 @@
+Enter vim.exe through main(), not wmain(): the multicall fold takes the
+program's entry from main. wmain() ignores its arguments (VimMain re-reads
+the command line, which the dispatcher rewrites), so a narrow main() is
+equivalent. Without -municode the CRT looks for main.
+
+--- a/src/Make_cyg_ming.mak
++++ b/src/Make_cyg_ming.mak
+@@ -1023,7 +1023,7 @@
+ MZSCHEME_SUFFIX = Z
+ endif
+ 
+-LFLAGS += -municode
++
+ 
+ ifeq ($(VIMDLL),yes)
+ VIMEXE := vim$(DEBUG_SUFFIX).exe
+--- a/src/os_w32exe.c
++++ b/src/os_w32exe.c
+@@ -40,7 +40,7 @@
+ }
+ #else
+     int
+-wmain(int argc UNUSED, wchar_t **argv UNUSED)
++main(int argc UNUSED, char **argv UNUSED)
+ {
+     SaveInst(GetModuleHandleW(NULL));
+     return VimMain(0, NULL);

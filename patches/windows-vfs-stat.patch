@@ -1,0 +1,36 @@
+vim_stat: answer for paths inside the embedded runtime. vim verifies a
+runtime file with mch_getperm() -> mch_stat() before sourcing it, so
+without this :runtime, :syntax and the menus find nothing. A file is
+materialised to a temp path and stat'ed there; a directory gets a
+synthetic S_IFDIR.
+
+--- a/src/os_mswin.c
++++ b/src/os_mswin.c
+@@ -14,6 +14,9 @@
+  */
+ 
+ #include "vim.h"
++extern int unpin_vfs_is_virtual(const char *);
++extern const char *unpin_vfs_winpath(const char *);
++extern int unpin_vfs_win_isdir(const char *);
+ 
+ #include <sys/types.h>
+ #include <limits.h>
+@@ -547,6 +550,17 @@
+     int
+ vim_stat(const char *name, stat_T *stp)
+ {
++    if (unpin_vfs_is_virtual(name)) {
++	const char *__m = unpin_vfs_winpath(name);
++	if (__m) return stat_impl(__m, stp, TRUE);
++	if (unpin_vfs_win_isdir(name)) {
++	    memset(stp, 0, sizeof(*stp));
++	    stp->st_mode = S_IFDIR | 0555;
++	    stp->st_nlink = 1;
++	    return 0;
++	}
++	return -1;
++    }
+     return stat_impl(name, stp, TRUE);
+ }
+ 

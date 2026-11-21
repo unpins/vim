@@ -1,0 +1,27 @@
+mch_isdir asks GetFileAttributesW, which only knows paths on disk, so
+every directory under the embedded runtime read as missing (`:packadd`
+tests pack/*/opt/<name> as a directory). Route it through the VFS shim,
+which forwards real paths.
+
+--- a/src/os_mswin.c
++++ b/src/os_mswin.c
+@@ -14,6 +14,8 @@
+  */
+ 
+ #include "vim.h"
++extern DWORD unpin_vfs_get_file_attributes_w(const wchar_t *);
++#define GetFileAttributesW unpin_vfs_get_file_attributes_w
+ extern int unpin_vfs_is_virtual(const char *);
+ extern const char *unpin_vfs_winpath(const char *);
+ extern int unpin_vfs_win_isdir(const char *);
+--- a/src/os_win32.c
++++ b/src/os_win32.c
+@@ -21,6 +21,8 @@
+  */
+ 
+ #include "vim.h"
++extern DWORD unpin_vfs_get_file_attributes_w(const wchar_t *);
++#define GetFileAttributesW unpin_vfs_get_file_attributes_w
+ extern int unpin_vfs_is_virtual(const char *);
+ extern int unpin_vfs_open(const char *, int, ...);
+ extern FILE *unpin_vfs_fopen(const char *, const char *);

@@ -50,22 +50,16 @@
         '';
 
       injectVfs = pkgs: oldDrv: oldDrv.overrideAttrs (old: {
+        patches = (old.patches or [ ]) ++ [
+          ./patches/unpins-init-xxd.patch
+          ./patches/makefile-unpin-objs.patch
+        ];
         postPatch = (old.postPatch or "") + ''
           echo "==> inject unpin-vfs core (vfs.c + miniz.c, bound by IR rename)"
           cp ${ulib.vfsCore}/*.c ${ulib.vfsCore}/*.h src/
           cp ${./unpins_init.c} src/unpins_init.c
 
-          echo "==> declare + wire unpins glue into main(): xxd dispatch (pre) + env pin (post)"
-          # No vim.h macro hooks: the postBuild pass below renames vim's own
-          # libc open/stat/opendir/... references to the VFS shims.
-          # unpins_xxd_dispatch() runs FIRST (multicall: argv[0]=="xxd" -> xxd
-          # and exit); unpins_init() runs after mch_early_init() to pin
-          # $VIMRUNTIME/$VIM at the mount root.
-          sed -i '1i extern void unpins_init(void);\nextern void unpins_xxd_dispatch(int, char **);' src/main.c
-          sed -i '0,/mch_early_init();/{s|mch_early_init();|unpins_xxd_dispatch(argc, argv);\n    mch_early_init();\n    unpins_init();|}' src/main.c
-
-          echo "==> add OBJ entries + compile rules to autotools Makefile"
-          sed -i 's|$(XDIFF_OBJS_USED)|$(XDIFF_OBJS_USED) \\\n\tobjects/vfs.o \\\n\tobjects/unpins_init.o \\\n\tobjects/unpin_zstd.o \\\n\tobjects/miniz.o \\\n\tobjects/xxd.o|' src/Makefile
+          # Compile rules for the objects makefile-unpin-objs.patch adds.
           cat ${./patches/Makefile_append} >> src/Makefile
         '';
 
@@ -235,111 +229,19 @@
           strictDeps = true;
           enableParallelBuilding = true;
 
+          patches = [
+            ./patches/windows-unpins-init-xxd.patch
+            ./patches/windows-main-entry.patch
+            ./patches/windows-vfs-open.patch
+            ./patches/windows-vfs-stat.patch
+            ./patches/windows-vfs-getfileattributes.patch
+            ./patches/windows-vfs-findfirst.patch
+          ];
+
           postPatch = ''
             echo "==> inject unpin-vfs core sources"
             cp ${ulib.vfsCore}/*.c ${ulib.vfsCore}/*.h src/
             cp ${./unpins_init.c} src/unpins_init.c
-
-            echo "==> declare + wire unpins glue into VimMain(): env pin + xxd dispatch"
-            # On Windows, VimMain() ignores the argv it is handed and re-fetches
-            # the real (wide) command line with get_cmd_argsW() -- AFTER
-            # mch_early_init(). So pin the env after mch_early_init (as on Unix),
-            # but dispatch xxd only AFTER get_cmd_argsW(), or argv[0] is still the
-            # unreliable narrow value and never matches "xxd".
-            sed -i '1i extern void unpins_init(void);\nextern void unpins_xxd_dispatch(int, char **);' src/main.c
-            sed -i '0,/mch_early_init();/{s|mch_early_init();|mch_early_init();\n    unpins_init();|}' src/main.c
-            sed -i 's|argc = get_cmd_argsW(&argv);|&\n    unpins_xxd_dispatch(argc, argv);|' src/main.c
-
-            echo "==> enter through main(), not wmain()"
-            # The multicall module takes the program's entry from `main`. vim's
-            # wmain() ignores its arguments (VimMain re-reads the command line,
-            # which the dispatcher rewrites), so a narrow main() is equivalent.
-            sed -i 's|^wmain(int argc UNUSED, wchar_t \*\*argv UNUSED)$|main(int argc UNUSED, char **argv UNUSED)|' src/os_w32exe.c
-            grep -q '^main(int argc UNUSED, char \*\*argv UNUSED)$' src/os_w32exe.c \
-              || { echo "wmain -> main did not apply" >&2; exit 1; }
-            sed -i 's|^LFLAGS += -municode$||' src/Make_cyg_ming.mak
-            if grep -q '^LFLAGS += -municode' src/Make_cyg_ming.mak; then echo "-municode not dropped" >&2; exit 1; fi
-
-            echo "==> patch os_win32.c mch_open/mch_fopen to dispatch virtual paths via the VFS"
-            # No win32_* to --wrap here; give the real mch_open/mch_fopen a
-            # virtual-path fast path at entry, calling the explicit unpin_vfs_*
-            # API (declared inline -- unpin_vfs_fopen lives behind UNPIN_VFS_DIRS
-            # in vfs.h, which this TU doesn't define).
-            sed -i 's|^#include "vim.h"|#include "vim.h"\nextern int unpin_vfs_is_virtual(const char *);\nextern int unpin_vfs_open(const char *, int, ...);\nextern FILE *unpin_vfs_fopen(const char *, const char *);|' src/os_win32.c
-            awk '
-            /^mch_open\(const char \*name, int flags, int mode\)$/ {
-                print; getline; print;
-                print "    if (unpin_vfs_is_virtual(name))";
-                print "\treturn unpin_vfs_open(name, flags, mode);";
-                next;
-            }
-            /^mch_fopen\(const char \*name, const char \*mode\)$/ {
-                print; getline; print;
-                print "    if (unpin_vfs_is_virtual(name))";
-                print "\treturn unpin_vfs_fopen(name, mode);";
-                next;
-            }
-            { print }' src/os_win32.c > src/os_win32.c.new
-            mv src/os_win32.c.new src/os_win32.c
-
-            echo "==> patch os_mswin.c vim_stat so :runtime/:syntax resolve in the VFS"
-            # mch_stat is a macro -> vim_stat() -> stat_impl(). vim's
-            # gen_expand_wildcards verifies a (wildcard-free) runtime file with
-            # mch_getperm()->mch_stat() BEFORE sourcing it, so without this the
-            # whole runtime tree (syntax/menu/ftplugin/indent) is invisible.
-            # Materialise the virtual path to a temp and let vim's own stat_impl
-            # fill its stat_T (avoids re-deriving the struct layout here).
-            sed -i 's|^#include "vim.h"|#include "vim.h"\nextern int unpin_vfs_is_virtual(const char *);\nextern const char *unpin_vfs_winpath(const char *);\nextern int unpin_vfs_win_isdir(const char *);|' src/os_mswin.c
-            awk '
-            /^vim_stat\(const char \*name, stat_T \*stp\)$/ {
-                print; getline; print;
-                print "    if (unpin_vfs_is_virtual(name)) {";
-                print "\tconst char *__m = unpin_vfs_winpath(name);";
-                print "\tif (__m) return stat_impl(__m, stp, TRUE);";
-                print "\tif (unpin_vfs_win_isdir(name)) {";
-                print "\t    memset(stp, 0, sizeof(*stp));";
-                print "\t    stp->st_mode = S_IFDIR | 0555;";
-                print "\t    stp->st_nlink = 1;";
-                print "\t    return 0;";
-                print "\t}";
-                print "\treturn -1;";
-                print "    }";
-                next;
-            }
-            { print }' src/os_mswin.c > src/os_mswin.c.new
-            mv src/os_mswin.c.new src/os_mswin.c
-            grep -q 'unpin_vfs_win_isdir' src/os_mswin.c \
-              || { echo "vim_stat directory branch did not apply" >&2; exit 1; }
-
-            echo "==> route the win32 directory test (mch_isdir) through the VFS"
-            # mch_isdir does NOT go through stat: it asks GetFileAttributesW,
-            # which the kernel answers only for a path on disk. So every
-            # directory under the mount read as "does not exist", and
-            # `:packadd matchit` -- which tests pack/*/opt/<name> as a
-            # DIRECTORY -- found nothing, along with every other directory test.
-            for __f in src/os_win32.c src/os_mswin.c; do
-              sed -i 's|^#include "vim.h"|#include "vim.h"\nextern DWORD unpin_vfs_get_file_attributes_w(const wchar_t *);\n#define GetFileAttributesW unpin_vfs_get_file_attributes_w|' "$__f"
-              grep -q 'unpin_vfs_get_file_attributes_w' "$__f" \
-                || { echo "GetFileAttributesW redirect did not apply to $__f" >&2; exit 1; }
-            done
-
-            echo "==> route the win32 directory scans through the VFS"
-            # Two functions scan a directory on Windows, both by asking the
-            # kernel through FindFirstFileW, which answers for real directories
-            # only: dos_expandpath (filepath.c -- every wildcard vim expands)
-            # and readdir_core (fileio.c -- the readdir()/readdirex()
-            # builtins). So every glob under the mount came back empty while
-            # the same files opened fine by exact name: `:colorscheme <Tab>`
-            # and `:syntax <Tab>` offered nothing, `readdir($VIMRUNTIME)` was
-            # []. The shim serves virtual directories from the ZIP and forwards
-            # every other pattern to the real API, so redirecting the names for
-            # the whole file is safe; the backup/tempname uses in other files
-            # are left alone.
-            for __f in src/filepath.c src/fileio.c; do
-              sed -i 's|^#include "vim.h"|#include "vim.h"\n#include <windows.h>\nextern HANDLE unpin_vfs_find_first_w(const wchar_t *, WIN32_FIND_DATAW *);\nextern BOOL unpin_vfs_find_next_w(HANDLE, WIN32_FIND_DATAW *);\nextern BOOL unpin_vfs_find_close(HANDLE);\n#define FindFirstFileW unpin_vfs_find_first_w\n#define FindNextFileW  unpin_vfs_find_next_w\n#define FindClose      unpin_vfs_find_close|' "$__f"
-              grep -q 'unpin_vfs_find_first_w' "$__f" \
-                || { echo "Find* redirect did not apply to $__f" >&2; exit 1; }
-            done
 
             echo "==> add OBJ entries to Make_cyg_ming.mak"
             cat ${./patches/Make_cyg_ming_append} >> src/Make_cyg_ming.mak

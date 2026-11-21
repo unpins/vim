@@ -1,0 +1,38 @@
+dos_expandpath (filepath.c, every wildcard vim expands) and readdir_core
+(fileio.c, readdir()/readdirex()) scan with FindFirstFileW, which only
+knows real directories, so globs under the embedded runtime came back
+empty (`:colorscheme <Tab>`, `readdir($VIMRUNTIME)`). Route both files'
+Find* calls through the VFS shim, which forwards real paths.
+
+--- a/src/fileio.c
++++ b/src/fileio.c
+@@ -12,6 +12,13 @@
+  */
+ 
+ #include "vim.h"
++#include <windows.h>
++extern HANDLE unpin_vfs_find_first_w(const wchar_t *, WIN32_FIND_DATAW *);
++extern BOOL unpin_vfs_find_next_w(HANDLE, WIN32_FIND_DATAW *);
++extern BOOL unpin_vfs_find_close(HANDLE);
++#define FindFirstFileW unpin_vfs_find_first_w
++#define FindNextFileW  unpin_vfs_find_next_w
++#define FindClose      unpin_vfs_find_close
+ 
+ #if defined(__TANDEM)
+ # include <limits.h>		// for SSIZE_MAX
+--- a/src/filepath.c
++++ b/src/filepath.c
+@@ -12,6 +12,13 @@
+  */
+ 
+ #include "vim.h"
++#include <windows.h>
++extern HANDLE unpin_vfs_find_first_w(const wchar_t *, WIN32_FIND_DATAW *);
++extern BOOL unpin_vfs_find_next_w(HANDLE, WIN32_FIND_DATAW *);
++extern BOOL unpin_vfs_find_close(HANDLE);
++#define FindFirstFileW unpin_vfs_find_first_w
++#define FindNextFileW  unpin_vfs_find_next_w
++#define FindClose      unpin_vfs_find_close
+ 
+ #ifdef MSWIN
+ /*
